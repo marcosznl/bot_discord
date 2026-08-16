@@ -3,8 +3,7 @@ venv/
 __pycache__/
 *.pyc
 bot.log
-xp.db
-playlists.db
+data/
 mc_config.json
 boas_vindas.json
 .DS_Store

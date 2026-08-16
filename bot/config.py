@@ -8,6 +8,9 @@ load_dotenv()
 # arquivos de dados (json/sqlite) independente de onde o cog em si esteja.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Pasta com os bancos sqlite (xp.db, playlists.db).
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 MC_BOOT_TIMEOUT = 300

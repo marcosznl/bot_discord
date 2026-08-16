@@ -6,10 +6,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.config import BASE_DIR
+from bot.config import DATA_DIR
 from bot.cogs.musica import _filas_musica, _formatar_duracao_musica, _tocar_proximo, _ytdlp_buscar
 
-PLAYLIST_DB_PATH = os.path.join(BASE_DIR, "playlists.db")
+PLAYLIST_DB_PATH = os.path.join(DATA_DIR, "playlists.db")
 
 
 def _playlist_conectar_bd():

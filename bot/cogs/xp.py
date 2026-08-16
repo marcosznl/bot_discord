@@ -8,9 +8,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot.config import BASE_DIR
+from bot.config import DATA_DIR
 
-XP_DB_PATH = os.path.join(BASE_DIR, "xp.db")
+XP_DB_PATH = os.path.join(DATA_DIR, "xp.db")
 XP_COOLDOWN_SEGUNDOS = 20
 XP_MIN_POR_MENSAGEM = 15
 XP_MAX_POR_MENSAGEM = 25
