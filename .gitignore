@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 bot.log
 data/
+.pytest_cache/
 mc_config.json
 boas_vindas.json
 .DS_Store
