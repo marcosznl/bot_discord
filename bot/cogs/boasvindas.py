@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 
 import discord
@@ -7,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.config import BASE_DIR
+from bot.jsonstore import escrever_json, ler_json
 
 # Configuracao de boas-vindas por servidor (canal + mensagem), definida pelo
 # comando /boasvindas e guardada em BOAS_VINDAS_CONFIG_PATH - nao precisa
@@ -16,11 +16,7 @@ BOAS_VINDAS_MENSAGEM_PADRAO = "Bem-vindo(a) ao servidor, {membro}!"
 
 
 def _boas_vindas_config_bruta() -> dict:
-    try:
-        with open(BOAS_VINDAS_CONFIG_PATH, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return ler_json(BOAS_VINDAS_CONFIG_PATH)
 
 
 def _boas_vindas_config(guild_id: int) -> dict | None:
@@ -34,15 +30,13 @@ def _boas_vindas_definir(guild_id: int, canal_id: int | None = None, mensagem: s
         entrada["canal_id"] = canal_id
     if mensagem is not None:
         entrada["mensagem"] = mensagem
-    with open(BOAS_VINDAS_CONFIG_PATH, "w", encoding="utf-8") as arquivo:
-        json.dump(dados, arquivo, indent=2)
+    escrever_json(BOAS_VINDAS_CONFIG_PATH, dados)
 
 
 def _boas_vindas_desativar(guild_id: int) -> None:
     dados = _boas_vindas_config_bruta()
     dados.pop(str(guild_id), None)
-    with open(BOAS_VINDAS_CONFIG_PATH, "w", encoding="utf-8") as arquivo:
-        json.dump(dados, arquivo, indent=2)
+    escrever_json(BOAS_VINDAS_CONFIG_PATH, dados)
 
 
 class ModalBoasVindasMensagem(discord.ui.Modal):

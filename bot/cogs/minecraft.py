@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import re
 import subprocess
@@ -22,20 +21,8 @@ from bot.config import (
     MC_SERVERS_DIR,
     MC_SHUTDOWN_TIMEOUT,
 )
-
-# Duplicado de proposito (tambem existe em bot/cogs/llm.py): sao poucas linhas
-# e assim mc.py e llm.py continuam independentes um do outro, sem precisar
-# importar de um para o outro so por causa dessa checagem de RAM.
-RAM_MARGEM_SEGURANCA_GB = 0.5
-
-
-def _ram_disponivel_gb() -> float:
-    return psutil.virtual_memory().available / (1024**3)
-
-
-def _ram_suficiente_para(necessaria_gb: float) -> tuple[bool, float]:
-    disponivel = _ram_disponivel_gb()
-    return disponivel >= necessaria_gb + RAM_MARGEM_SEGURANCA_GB, disponivel
+from bot.jsonstore import escrever_json, ler_json
+from bot.ram import _ram_suficiente_para
 
 
 def _formatar_duracao(segundos: int) -> str:
@@ -75,18 +62,13 @@ MC_JARS_PREFERIDOS = ("server.jar", "run.jar", "paper.jar", "purpur.jar", "spigo
 
 
 def _mc_config_bruta() -> dict:
-    try:
-        with open(MC_CONFIG_PATH, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return ler_json(MC_CONFIG_PATH)
 
 
 def _mc_persistir_ajuste(chave: str, ajustes: dict) -> None:
     dados = _mc_config_bruta()
     dados.setdefault(chave, {}).update(ajustes)
-    with open(MC_CONFIG_PATH, "w", encoding="utf-8") as arquivo:
-        json.dump(dados, arquivo, indent=2)
+    escrever_json(MC_CONFIG_PATH, dados)
 
 
 def _mc_inferir_comando(caminho: str) -> list[str] | None:

@@ -19,6 +19,7 @@ from bot.config import (
     LMS_CLI,
     LM_STUDIO_URL,
 )
+from bot.ram import _ram_suficiente_para
 
 # Descricao curta do ponto forte de cada modelo, usada pelo /ajuda_llm.
 # Modelos baixados sem entrada aqui aparecem com uma descricao generica.
@@ -51,20 +52,6 @@ LLM_FERRAMENTA_BUSCA = {
 
 _llm_historico: dict[tuple[int | None, int, int], list[dict]] = {}
 _llm_ultima_interacao: float | None = None
-
-# Duplicado de proposito (tambem existe em bot/cogs/minecraft.py): sao poucas
-# linhas e assim mc.py e llm.py continuam independentes um do outro, sem
-# precisar importar de um para o outro so por causa dessa checagem de RAM.
-RAM_MARGEM_SEGURANCA_GB = 0.5
-
-
-def _ram_disponivel_gb() -> float:
-    return psutil.virtual_memory().available / (1024**3)
-
-
-def _ram_suficiente_para(necessaria_gb: float) -> tuple[bool, float]:
-    disponivel = _ram_disponivel_gb()
-    return disponivel >= necessaria_gb + RAM_MARGEM_SEGURANCA_GB, disponivel
 
 
 def _llm_servidor_rodando() -> bool:
