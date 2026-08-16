@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 import time
 
@@ -6,6 +7,8 @@ import discord
 import yt_dlp
 from discord import app_commands
 from discord.ext import commands, tasks
+
+logger = logging.getLogger(__name__)
 
 YTDLP_OPTS = {
     "format": "bestaudio/best",
@@ -61,7 +64,7 @@ def _tocar_proximo(guild_id: int, voice_client: discord.VoiceClient, tentativas:
     try:
         _, url, user_agent, _ = _ytdlp_buscar(busca)
     except Exception as erro:
-        print(f"Erro ao extrair musica '{titulo}': {erro}")
+        logger.error(f"Erro ao extrair musica '{titulo}': {erro}")
         fila.pop(0)
         _tocar_proximo(guild_id, voice_client)
         return
@@ -77,12 +80,12 @@ def _tocar_proximo(guild_id: int, voice_client: discord.VoiceClient, tentativas:
     def _apos_tocar(erro):
         duracao = time.time() - inicio
         if duracao < FALHA_REPRODUCAO_SEGUNDOS and tentativas == 0:
-            print(f"'{titulo}' parou em {duracao:.1f}s (provavel link bloqueado), tentando outro link...")
+            logger.warning(f"'{titulo}' parou em {duracao:.1f}s (provavel link bloqueado), tentando outro link...")
             _tocar_proximo(guild_id, voice_client, tentativas=1)
             return
 
         if erro:
-            print(f"Erro ao tocar '{titulo}': {erro}")
+            logger.error(f"Erro ao tocar '{titulo}': {erro}")
 
         fila_atual = _filas_musica.get(guild_id, [])
         modo_repetir = _repetir_musica.get(guild_id)
@@ -119,7 +122,7 @@ async def _musica_acao_tocar(interaction: discord.Interaction, busca: str) -> No
     try:
         titulo, _, _, duracao = await asyncio.to_thread(_ytdlp_buscar, busca)
     except Exception as erro:
-        print(f"Erro ao buscar musica '{busca}': {erro}")
+        logger.error(f"Erro ao buscar musica '{busca}': {erro}")
         await interaction.followup.send("Nao consegui encontrar essa musica.")
         return
 

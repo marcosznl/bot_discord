@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 
 import discord
@@ -7,6 +8,8 @@ from discord.ext import commands, tasks
 
 from bot.cogs import llm as llm_cog
 from bot.config import STATUS_SEM_SERVIDOR, TOKEN
+
+logger = logging.getLogger(__name__)
 
 BOT_INICIO = time.time()
 
@@ -107,8 +110,8 @@ async def on_ready():
     app_info = await bot.application_info()
     bot.owner_id = app_info.owner.id
     await tree.sync()
-    print(f"Bot conectado como {bot.user}")
+    logger.info(f"Bot conectado como {bot.user}")
 
 
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    bot.run(TOKEN, root_logger=True)

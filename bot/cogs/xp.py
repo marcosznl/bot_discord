@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import random
 import sqlite3
@@ -9,6 +10,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.config import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 XP_DB_PATH = os.path.join(DATA_DIR, "xp.db")
 XP_COOLDOWN_SEGUNDOS = 20
@@ -645,12 +648,12 @@ class XP(commands.Cog):
                     if cargo_id:
                         cargo = message.guild.get_role(cargo_id)
                         if cargo is None:
-                            print(f"Cargo {cargo_id} do nivel {nivel_depois} nao foi encontrado no servidor.")
+                            logger.warning(f"Cargo {cargo_id} do nivel {nivel_depois} nao foi encontrado no servidor.")
                         else:
                             try:
                                 await message.author.add_roles(cargo)
                             except discord.Forbidden:
-                                print(f"Sem permissao para dar o cargo '{cargo.name}' (nivel {nivel_depois}).")
+                                logger.warning(f"Sem permissao para dar o cargo '{cargo.name}' (nivel {nivel_depois}).")
 
     @tasks.loop(hours=1)
     async def verificar_xp_semana(self):

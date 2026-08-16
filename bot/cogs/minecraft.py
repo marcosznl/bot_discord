@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import re
 import subprocess
@@ -23,6 +24,8 @@ from bot.config import (
 )
 from bot.jsonstore import escrever_json, ler_json
 from bot.ram import _ram_suficiente_para
+
+logger = logging.getLogger(__name__)
 
 
 def _formatar_duracao(segundos: int) -> str:
@@ -302,7 +305,7 @@ def _mc_jogadores_online(config) -> str | None:
     try:
         resposta = _mc_rcon_comando(config, "list")
     except Exception as erro:
-        print(f"Erro ao consultar jogadores via RCON em {config['nome']}: {erro}")
+        logger.error(f"Erro ao consultar jogadores via RCON em {config['nome']}: {erro}")
         return None
     return re.sub(r"§.", "", resposta).strip() or None
 
@@ -397,7 +400,7 @@ async def _mc_acao_comando(interaction: discord.Interaction, config: dict, coman
         # para o timeout, que so funciona na thread principal.
         resposta = _mc_rcon_comando(config, comando)
     except Exception as erro:
-        print(f"Erro ao executar comando RCON em {config['nome']}: {erro}")
+        logger.error(f"Erro ao executar comando RCON em {config['nome']}: {erro}")
         await interaction.followup.send(f"Nao consegui executar o comando em {config['nome']}.")
         return
 
@@ -678,7 +681,7 @@ async def _mc_autocomplete_servidor(interaction: discord.Interaction, atual: str
 
 
 async def _mc_avisar_crash(bot: commands.Bot, config: dict) -> None:
-    print(f"{config['nome']} parou de responder inesperadamente (possivel crash).")
+    logger.warning(f"{config['nome']} parou de responder inesperadamente (possivel crash).")
     if MC_CHAT_CHANNEL_ID:
         canal = bot.get_channel(MC_CHAT_CHANNEL_ID)
         if canal is not None:
@@ -749,7 +752,7 @@ class Minecraft(commands.Cog):
             _mc_parada_esperada.add(chave)
             processo.terminate()
             minutos = MC_AUTO_DESLIGAR_SEGUNDOS // 60
-            print(f"{config['nome']} desligado automaticamente por ficar {minutos} minutos sem jogadores.")
+            logger.info(f"{config['nome']} desligado automaticamente por ficar {minutos} minutos sem jogadores.")
             if MC_CHAT_CHANNEL_ID:
                 canal = self.bot.get_channel(MC_CHAT_CHANNEL_ID)
                 if canal is not None:

@@ -1,10 +1,13 @@
 import asyncio
 import json
+import logging
 import subprocess
 
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+logger = logging.getLogger(__name__)
 
 
 def _teste_velocidade() -> dict:
@@ -32,7 +35,7 @@ class Admin(commands.Cog):
         try:
             dados = await asyncio.to_thread(_teste_velocidade)
         except Exception as erro:
-            print(f"Erro no teste de velocidade: {erro}")
+            logger.error(f"Erro no teste de velocidade: {erro}")
             await interaction.followup.send("Nao consegui rodar o teste de velocidade agora.")
             return
 

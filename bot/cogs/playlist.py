@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sqlite3
 
@@ -20,6 +21,8 @@ from bot.cogs.musica import (
     _tocar_proximo,
     _ytdlp_buscar,
 )
+
+logger = logging.getLogger(__name__)
 
 PLAYLIST_DB_PATH = os.path.join(DATA_DIR, "playlists.db")
 
@@ -91,7 +94,7 @@ async def _playlist_acao_adicionar(interaction: discord.Interaction, nome: str, 
     try:
         titulo, _, _, duracao = await asyncio.to_thread(_ytdlp_buscar, busca)
     except Exception as erro:
-        print(f"Erro ao buscar musica '{busca}' para playlist: {erro}")
+        logger.error(f"Erro ao buscar musica '{busca}' para playlist: {erro}")
         await interaction.followup.send("Nao consegui encontrar essa musica.")
         return
 

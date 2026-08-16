@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 import subprocess
 import time
@@ -20,6 +21,8 @@ from bot.config import (
     LM_STUDIO_URL,
 )
 from bot.ram import _ram_suficiente_para
+
+logger = logging.getLogger(__name__)
 
 # Descricao curta do ponto forte de cada modelo, usada pelo /ajuda_llm.
 # Modelos baixados sem entrada aqui aparecem com uma descricao generica.
@@ -192,14 +195,14 @@ async def _llm_auto_ligar() -> tuple[bool, str]:
         subprocess.run, [LMS_CLI, "load", LLM_MODELO, "-y"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        print(f"Erro ao carregar modelo da LLM (auto): {resultado.stderr}")
+        logger.error(f"Erro ao carregar modelo da LLM (auto): {resultado.stderr}")
         return False, "Nao consegui ligar a LLM local agora."
 
     resultado = await asyncio.to_thread(
         subprocess.run, [LMS_CLI, "server", "start"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        print(f"Erro ao iniciar servidor da LLM (auto): {resultado.stderr}")
+        logger.error(f"Erro ao iniciar servidor da LLM (auto): {resultado.stderr}")
         return False, "Modelo carregado, mas nao consegui ligar o servidor da LLM."
 
     return True, ""
@@ -231,7 +234,7 @@ async def _responder_llm(bot: commands.Bot, message: discord.Message) -> None:
         try:
             resposta = await _consultar_llm_local(historico)
         except Exception as erro:
-            print(f"Erro ao consultar LLM local: {erro}")
+            logger.error(f"Erro ao consultar LLM local: {erro}")
             await message.channel.send("Nao consegui falar com a LLM local agora. Ela esta rodando?")
             historico.pop()
             return
@@ -267,7 +270,7 @@ async def _llm_acao_ligar(interaction: discord.Interaction, modelo: str | None =
         subprocess.run, [LMS_CLI, "load", modelo_escolhido, "-y"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        print(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+        logger.error(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
         await interaction.followup.send("Nao consegui carregar o modelo da LLM.")
         return
 
@@ -275,7 +278,7 @@ async def _llm_acao_ligar(interaction: discord.Interaction, modelo: str | None =
         subprocess.run, [LMS_CLI, "server", "start"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        print(f"Erro ao iniciar servidor da LLM: {resultado.stderr}")
+        logger.error(f"Erro ao iniciar servidor da LLM: {resultado.stderr}")
         await interaction.followup.send("Modelo carregado, mas nao consegui iniciar o servidor.")
         return
 
@@ -375,7 +378,7 @@ async def _llm_acao_trocar(interaction: discord.Interaction, modelo: str) -> Non
         subprocess.run, [LMS_CLI, "load", modelo, "-y"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        print(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+        logger.error(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
         await interaction.followup.send(f"Nao consegui carregar o modelo `{modelo}`.")
         return
 
@@ -463,7 +466,7 @@ class LLM(commands.Cog):
         await asyncio.to_thread(subprocess.run, [LMS_CLI, "unload", "--all"], capture_output=True, text=True)
         _llm_ultima_interacao = None
         minutos = LLM_AUTO_DESLIGAR_SEGUNDOS // 60
-        print(f"LLM local desligada automaticamente por ficar {minutos} minutos sem uso.")
+        logger.info(f"LLM local desligada automaticamente por ficar {minutos} minutos sem uso.")
 
     @app_commands.command(name="llm", description="Controla a LLM local")
     async def llm(self, interaction: discord.Interaction):
