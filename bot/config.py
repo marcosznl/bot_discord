@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Raiz do projeto (onde main.py mora) - usada pelos cogs para achar seus
+# arquivos de dados (json/sqlite) independente de onde o cog em si esteja.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 MC_BOOT_TIMEOUT = 300

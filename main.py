@@ -37,42 +37,6 @@ from bot.config import (
     TOKEN,
 )
 
-# Configuracao de boas-vindas por servidor (canal + mensagem), definida pelo
-# comando /boasvindas e guardada em BOAS_VINDAS_CONFIG_PATH - nao precisa
-# mexer no .env nem reiniciar o bot para configurar.
-BOAS_VINDAS_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "boas_vindas.json")
-BOAS_VINDAS_MENSAGEM_PADRAO = "Bem-vindo(a) ao servidor, {membro}!"
-
-
-def _boas_vindas_config_bruta() -> dict:
-    try:
-        with open(BOAS_VINDAS_CONFIG_PATH, "r", encoding="utf-8") as arquivo:
-            return json.load(arquivo)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def _boas_vindas_config(guild_id: int) -> dict | None:
-    return _boas_vindas_config_bruta().get(str(guild_id))
-
-
-def _boas_vindas_definir(guild_id: int, canal_id: int | None = None, mensagem: str | None = None) -> None:
-    dados = _boas_vindas_config_bruta()
-    entrada = dados.setdefault(str(guild_id), {})
-    if canal_id is not None:
-        entrada["canal_id"] = canal_id
-    if mensagem is not None:
-        entrada["mensagem"] = mensagem
-    with open(BOAS_VINDAS_CONFIG_PATH, "w", encoding="utf-8") as arquivo:
-        json.dump(dados, arquivo, indent=2)
-
-
-def _boas_vindas_desativar(guild_id: int) -> None:
-    dados = _boas_vindas_config_bruta()
-    dados.pop(str(guild_id), None)
-    with open(BOAS_VINDAS_CONFIG_PATH, "w", encoding="utf-8") as arquivo:
-        json.dump(dados, arquivo, indent=2)
-
 # Descricao curta do ponto forte de cada modelo, usada pelo /ajuda_llm.
 # Modelos baixados sem entrada aqui aparecem com uma descricao generica.
 LLM_DESCRICOES = {
@@ -293,7 +257,17 @@ BOT_INICIO = time.time()
 intents = discord.Intents.default()
 intents.members = True  # necessario para o evento de boas-vindas (on_member_join)
 
-bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+# Cogs de feature, carregados um a um conforme vao sendo extraidos de main.py.
+EXTENSOES = ["bot.cogs.boasvindas"]
+
+
+class ArcoBot(commands.Bot):
+    async def setup_hook(self) -> None:
+        for extensao in EXTENSOES:
+            await self.load_extension(extensao)
+
+
+bot = ArcoBot(command_prefix=commands.when_mentioned, intents=intents)
 tree = bot.tree
 
 
@@ -725,21 +699,6 @@ async def _responder_llm(message: discord.Message) -> None:
 
     for inicio in range(0, len(resposta), 1900):
         await message.channel.send(resposta[inicio : inicio + 1900])
-
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    config = await asyncio.to_thread(_boas_vindas_config, member.guild.id)
-    if not config or not config.get("canal_id"):
-        return
-
-    canal = bot.get_channel(config["canal_id"])
-    if canal is None:
-        return
-
-    mensagem = config.get("mensagem", BOAS_VINDAS_MENSAGEM_PADRAO)
-    texto = mensagem.format(membro=member.mention, servidor=member.guild.name)
-    await canal.send(texto)
 
 
 @bot.event
@@ -3080,79 +3039,6 @@ async def reiniciar(interaction: discord.Interaction):
 
     await interaction.response.send_message("Reiniciando o bot...")
     await bot.close()
-
-
-class ModalBoasVindasMensagem(discord.ui.Modal):
-    def __init__(self, guild_id: int, atual: str):
-        super().__init__(title="Mensagem de boas-vindas")
-        self.guild_id = guild_id
-        self.mensagem = discord.ui.TextInput(
-            label="Texto (use {membro} e {servidor})",
-            style=discord.TextStyle.paragraph,
-            default=atual,
-            max_length=500,
-        )
-        self.add_item(self.mensagem)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await asyncio.to_thread(_boas_vindas_definir, self.guild_id, None, str(self.mensagem))
-        await interaction.response.send_message("Mensagem de boas-vindas atualizada.", ephemeral=True)
-
-
-class BotoesBoasVindas(discord.ui.View):
-    def __init__(self, guild_id: int):
-        super().__init__(timeout=600)
-        self.guild_id = guild_id
-        self.select_canal = discord.ui.ChannelSelect(
-            placeholder="Escolha o canal de boas-vindas",
-            channel_types=[discord.ChannelType.text],
-        )
-        self.select_canal.callback = self._canal_escolhido
-        self.add_item(self.select_canal)
-
-    async def _canal_escolhido(self, interaction: discord.Interaction):
-        canal = self.select_canal.values[0]
-        await asyncio.to_thread(_boas_vindas_definir, self.guild_id, canal.id, None)
-        await interaction.response.send_message(f"Canal de boas-vindas definido para {canal.mention}.", ephemeral=True)
-
-    @discord.ui.button(label="Editar mensagem", style=discord.ButtonStyle.primary)
-    async def editar_mensagem(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        atual = await asyncio.to_thread(_boas_vindas_config, self.guild_id)
-        mensagem_atual = (atual or {}).get("mensagem", BOAS_VINDAS_MENSAGEM_PADRAO)
-        await interaction.response.send_modal(ModalBoasVindasMensagem(self.guild_id, mensagem_atual))
-
-    @discord.ui.button(label="Ver configuracao", style=discord.ButtonStyle.secondary)
-    async def ver(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        config = await asyncio.to_thread(_boas_vindas_config, self.guild_id)
-        if not config or not config.get("canal_id"):
-            await interaction.response.send_message("Boas-vindas desativadas (nenhum canal configurado).", ephemeral=True)
-            return
-
-        canal = bot.get_channel(config["canal_id"])
-        canal_texto = canal.mention if canal is not None else f"<#{config['canal_id']}>"
-        mensagem = config.get("mensagem", BOAS_VINDAS_MENSAGEM_PADRAO)
-        await interaction.response.send_message(f"Canal: {canal_texto}\nMensagem: {mensagem}", ephemeral=True)
-
-    @discord.ui.button(label="Desativar", style=discord.ButtonStyle.danger)
-    async def desativar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await asyncio.to_thread(_boas_vindas_desativar, self.guild_id)
-        await interaction.response.send_message("Boas-vindas desativadas.", ephemeral=True)
-
-
-@tree.command(name="boasvindas", description="Configura a mensagem de boas-vindas para novos membros")
-async def boasvindas(interaction: discord.Interaction):
-    if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message(
-            "Voce precisa estar em um servidor e ter a permissao Gerenciar Servidor para usar esse comando.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.send_message(
-        "Escolha o canal e, se quiser, edite o texto de boas-vindas:",
-        view=BotoesBoasVindas(interaction.guild.id),
-        ephemeral=True,
-    )
 
 
 if __name__ == "__main__":
