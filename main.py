@@ -70,6 +70,16 @@ async def atualizar_presence():
 
 
 @bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    # O bot so usa slash commands - quando alguem menciona o bot (ex: "@bot oi"
+    # para falar com a LLM), o discord.py tenta interpretar isso como prefixo
+    # de comando de texto e gera esse erro a toa. Ignorado de proposito.
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
+
+@bot.event
 async def on_ready():
     if not atualizar_presence.is_running():
         atualizar_presence.start()
