@@ -119,10 +119,19 @@ class TentarComandoNovamente(discord.ui.View):
 @tree.error
 async def on_tree_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     comando = interaction.command
+    # interaction.response.is_done() so fica True depois que a PRIMEIRA
+    # resposta e aceita pelo Discord (o codigo interno do discord.py so seta
+    # isso apos a chamada de rede ter sucesso). Se ainda for False aqui, a
+    # interacao nunca foi respondida nem uma vez - ou seja, nao teve como o
+    # comando ter passado da primeira linha (todo comando deste bot responde
+    # ou da defer antes de qualquer efeito colateral). So nesse caso e seguro
+    # reexecutar do zero sem risco de duplicar uma acao que ja rodou.
+    interacao_nunca_respondida = not interaction.response.is_done()
     interacao_expirou = (
         isinstance(error, app_commands.CommandInvokeError)
         and isinstance(error.original, discord.NotFound)
         and error.original.code == 10062
+        and interacao_nunca_respondida
     )
 
     if interacao_expirou and comando is not None and interaction.channel is not None:
