@@ -12,6 +12,7 @@ import aiohttp
 import discord
 import psutil
 import yt_dlp
+from bs4 import BeautifulSoup
 from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
@@ -45,6 +46,25 @@ LLM_DESCRICOES = {
     "google/gemma-4-e4b": "Generalista leve do Google, tambem analisa imagens - bom modelo padrao do dia a dia.",
 }
 
+# Modelos que sabem usar "function calling" - so eles recebem a ferramenta de busca.
+LLM_MODELOS_COM_FERRAMENTAS = {"qwen/qwen3.5-9b", "google/gemma-4-e4b"}
+
+LLM_FERRAMENTA_BUSCA = {
+    "type": "function",
+    "function": {
+        "name": "buscar_na_internet",
+        "description": (
+            "Busca informacoes atuais na internet. Use quando a pergunta exigir "
+            "dados recentes ou algo que voce nao sabe."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"consulta": {"type": "string", "description": "O que buscar"}},
+            "required": ["consulta"],
+        },
+    },
+}
+
 _llm_historico: dict[tuple[int | None, int, int], list[dict]] = {}
 
 # Texto personalizavel do status do bot: usado no Custom Status (balao ao lado
@@ -73,11 +93,12 @@ SERVIDOR_CHOICES = [app_commands.Choice(name=cfg["nome"], value=chave) for chave
 COMANDOS_CATEGORIAS = {
     "Geral": ["ping", "status", "velocidade_server", "ajuda"],
     "Moderacao": ["limpar"],
-    "Niveis": ["rank", "leaderboard", "ajuda_xp"],
+    "Niveis": ["xp rank", "xp leaderboard", "xp ajuda"],
+    "Niveis (admin)": ["xp_config"],
     "Diversao": ["gif", "socao", "abraco", "charme"],
     "Musica": ["tocar", "pular", "parar", "volume"],
-    "Minecraft": ["mc_ligar", "mc_desligar", "mc_reiniciar"],
-    "LLM": ["llm_ligar", "llm_desligar", "llm_trocar", "ajuda_llm", "llm_esquecer"],
+    "Minecraft": ["mc"],
+    "LLM": ["llm"],
     "Administracao (dono)": ["desligar", "reiniciar"],
 }
 
@@ -128,6 +149,9 @@ intents = discord.Intents.default()
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+xp_group = app_commands.Group(name="xp", description="Consulta de XP e niveis")
+tree.add_command(xp_group)
 
 owner_id = None
 
@@ -190,7 +214,28 @@ def _xp_conectar_bd() -> sqlite3.Connection:
         "guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, xp INTEGER NOT NULL DEFAULT 0, "
         "PRIMARY KEY (guild_id, user_id))"
     )
+    conexao.execute("CREATE TABLE IF NOT EXISTS xp_desativado (guild_id INTEGER PRIMARY KEY)")
     return conexao
+
+
+def _xp_ativo(guild_id: int) -> bool:
+    with _xp_conectar_bd() as conexao:
+        linha = conexao.execute(
+            "SELECT 1 FROM xp_desativado WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+    return linha is None
+
+
+def _xp_definir_ativo(guild_id: int, ativo: bool) -> None:
+    with _xp_conectar_bd() as conexao:
+        if ativo:
+            conexao.execute("DELETE FROM xp_desativado WHERE guild_id = ?", (guild_id,))
+        else:
+            conexao.execute(
+                "INSERT INTO xp_desativado (guild_id) VALUES (?) ON CONFLICT (guild_id) DO NOTHING",
+                (guild_id,),
+            )
+        conexao.commit()
 
 
 def _xp_total_ate_nivel(nivel: int) -> int:
@@ -296,15 +341,54 @@ def _llm_chave_conversa(message: discord.Message) -> tuple[int | None, int, int]
     return (guild_id, message.channel.id, message.author.id)
 
 
-async def _consultar_llm_local(historico: list[dict]) -> str:
-    payload = {
-        "messages": [{"role": "system", "content": LLM_PROMPT_SISTEMA}, *historico],
-        "temperature": 0.7,
-    }
+async def _buscar_na_internet(consulta: str) -> str:
+    headers = {"User-Agent": "Mozilla/5.0"}
     async with aiohttp.ClientSession() as session:
-        async with session.post(LM_STUDIO_URL, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-            dados = await resp.json()
-    return dados["choices"][0]["message"]["content"]
+        async with session.post(
+            "https://html.duckduckgo.com/html/", data={"q": consulta}, headers=headers
+        ) as resp:
+            html = await resp.text()
+
+    soup = BeautifulSoup(html, "html.parser")
+    resultados = []
+    for item in soup.select(".result")[:5]:
+        titulo_el = item.select_one(".result__title")
+        snippet_el = item.select_one(".result__snippet")
+        if titulo_el and snippet_el:
+            resultados.append(f"{titulo_el.get_text(strip=True)}: {snippet_el.get_text(strip=True)}")
+
+    return "\n".join(resultados) if resultados else "Nenhum resultado encontrado."
+
+
+async def _consultar_llm_local(historico: list[dict]) -> str:
+    mensagens = [{"role": "system", "content": LLM_PROMPT_SISTEMA}, *historico]
+    usa_ferramentas = LLM_MODELO in LLM_MODELOS_COM_FERRAMENTAS
+
+    for _ in range(3):
+        payload = {"messages": mensagens, "temperature": 0.7}
+        if usa_ferramentas:
+            payload["tools"] = [LLM_FERRAMENTA_BUSCA]
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                LM_STUDIO_URL, json=payload, timeout=aiohttp.ClientTimeout(total=60)
+            ) as resp:
+                dados = await resp.json()
+
+        mensagem = dados["choices"][0]["message"]
+        chamadas = mensagem.get("tool_calls")
+        if not chamadas:
+            return mensagem["content"]
+
+        mensagens.append(mensagem)
+        for chamada in chamadas:
+            argumentos = json.loads(chamada["function"]["arguments"])
+            resultado_busca = await _buscar_na_internet(argumentos.get("consulta", ""))
+            mensagens.append(
+                {"role": "tool", "tool_call_id": chamada["id"], "content": resultado_busca}
+            )
+
+    return "Nao consegui gerar uma resposta apos consultar a internet."
 
 
 async def _responder_llm(message: discord.Message) -> None:
@@ -339,7 +423,7 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if message.guild is not None:
+    if message.guild is not None and await asyncio.to_thread(_xp_ativo, message.guild.id):
         chave = (message.guild.id, message.author.id)
         agora = time.time()
         if agora - _xp_cooldowns.get(chave, 0) >= XP_COOLDOWN_SEGUNDOS:
@@ -456,9 +540,20 @@ async def limpar(interaction: discord.Interaction, quantidade: app_commands.Rang
     await interaction.delete_original_response()
 
 
+def _todos_comandos_registrados() -> dict[str, app_commands.Command]:
+    resultado = {}
+    for item in tree.get_commands():
+        if isinstance(item, app_commands.Group):
+            for sub in item.commands:
+                resultado[f"{item.name} {sub.name}"] = sub
+        elif isinstance(item, app_commands.Command):
+            resultado[item.name] = item
+    return resultado
+
+
 @tree.command(name="ajuda", description="Mostra todos os comandos do bot, por categoria")
 async def ajuda(interaction: discord.Interaction):
-    comandos_por_nome = {c.name: c for c in tree.get_commands() if isinstance(c, app_commands.Command)}
+    comandos_por_nome = _todos_comandos_registrados()
 
     embed = discord.Embed(title="Comandos disponiveis", color=discord.Color.blue())
     for categoria, nomes in COMANDOS_CATEGORIAS.items():
@@ -538,7 +633,7 @@ def _barra_progresso(atual: int, total: int, tamanho: int = 20) -> str:
     return "█" * preenchido + "░" * (tamanho - preenchido)
 
 
-@tree.command(name="rank", description="Mostra seu nivel e XP (ou de outra pessoa)")
+@xp_group.command(name="rank", description="Mostra seu nivel e XP (ou de outra pessoa)")
 @app_commands.describe(pessoa="De quem ver o rank (padrao: voce)")
 async def rank(interaction: discord.Interaction, pessoa: discord.Member | None = None):
     alvo = pessoa or interaction.user
@@ -560,7 +655,7 @@ async def rank(interaction: discord.Interaction, pessoa: discord.Member | None =
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="leaderboard", description="Mostra os membros com mais XP no servidor")
+@xp_group.command(name="leaderboard", description="Mostra os membros com mais XP no servidor")
 async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
 
@@ -579,7 +674,93 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="ajuda_xp", description="Explica como funciona o sistema de XP e niveis")
+def _xp_resetar_servidor(guild_id: int) -> int:
+    with _xp_conectar_bd() as conexao:
+        cursor = conexao.execute("DELETE FROM xp_usuarios WHERE guild_id = ?", (guild_id,))
+        conexao.commit()
+        return cursor.rowcount
+
+
+class ConfirmarResetXP(discord.ui.View):
+    def __init__(self, guild_id: int, autor_id: int):
+        super().__init__(timeout=30)
+        self.guild_id = guild_id
+        self.autor_id = autor_id
+        self.mensagem: discord.InteractionMessage | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.autor_id:
+            await interaction.response.send_message(
+                "So quem pediu o reset pode confirmar.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirmar reset", style=discord.ButtonStyle.danger)
+    async def confirmar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        removidos = await asyncio.to_thread(_xp_resetar_servidor, self.guild_id)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content=f"XP resetado. {removidos} registro(s) apagado(s).", view=self
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.secondary)
+    async def cancelar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="Reset cancelado.", view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.mensagem:
+            try:
+                await self.mensagem.edit(content="Tempo esgotado - reset cancelado.", view=self)
+            except discord.HTTPException:
+                pass
+
+
+class BotoesXPConfig(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+
+    @discord.ui.button(label="Ativar", style=discord.ButtonStyle.success)
+    async def ativar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await asyncio.to_thread(_xp_definir_ativo, self.guild_id, True)
+        await interaction.response.send_message("Sistema de XP reativado neste servidor.", ephemeral=True)
+
+    @discord.ui.button(label="Desativar", style=discord.ButtonStyle.secondary)
+    async def desativar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await asyncio.to_thread(_xp_definir_ativo, self.guild_id, False)
+        await interaction.response.send_message("Sistema de XP desativado neste servidor.", ephemeral=True)
+
+    @discord.ui.button(label="Resetar", style=discord.ButtonStyle.danger)
+    async def resetar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        view = ConfirmarResetXP(self.guild_id, interaction.user.id)
+        await interaction.response.send_message(
+            "Tem certeza que quer apagar TODO o XP e nivel de todo mundo neste servidor? "
+            "Essa acao nao pode ser desfeita.",
+            view=view,
+            ephemeral=True,
+        )
+        view.mensagem = await interaction.original_response()
+
+
+@tree.command(name="xp_config", description="Configuracoes administrativas do sistema de XP")
+@app_commands.default_permissions(manage_guild=True)
+async def xp_config(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "O que voce quer fazer com o sistema de XP deste servidor?",
+        view=BotoesXPConfig(interaction.guild.id),
+        ephemeral=True,
+    )
+
+
+@xp_group.command(name="ajuda", description="Explica como funciona o sistema de XP e niveis")
 async def ajuda_xp(interaction: discord.Interaction):
     embed = discord.Embed(title="Como funciona o XP", color=discord.Color.blue())
     embed.add_field(
@@ -605,7 +786,7 @@ async def ajuda_xp(interaction: discord.Interaction):
     )
     embed.add_field(
         name="Comandos",
-        value="`/rank` mostra seu nivel e progresso. `/leaderboard` mostra o ranking do servidor.",
+        value="`/xp rank` mostra seu nivel e progresso. `/xp leaderboard` mostra o ranking do servidor.",
         inline=False,
     )
     await interaction.response.send_message(embed=embed)
@@ -899,17 +1080,13 @@ def _mc_info_conexao(config) -> str:
     return ""
 
 
-@tree.command(name="mc_ligar", description="Liga um servidor de Minecraft")
-@app_commands.describe(servidor="Qual servidor ligar")
-@app_commands.choices(servidor=SERVIDOR_CHOICES)
-async def mc_ligar(interaction: discord.Interaction, servidor: app_commands.Choice[str]):
-    config = MC_SERVERS[servidor.value]
+async def _mc_acao_ligar(interaction: discord.Interaction, config: dict) -> None:
     await interaction.response.defer()
 
     if await asyncio.to_thread(_llm_servidor_rodando):
         await interaction.followup.send(
             "Nao da pra ligar o servidor de Minecraft com a LLM local ligada - "
-            "os dois juntos passariam do limite de RAM da maquina. Use /llm_desligar primeiro."
+            "os dois juntos passariam do limite de RAM da maquina. Use /llm desligar primeiro."
         )
         return
 
@@ -929,27 +1106,21 @@ async def mc_ligar(interaction: discord.Interaction, servidor: app_commands.Choi
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    await interaction.followup.send(f"Ligando {config['nome']}, aguarde...")
+    mensagem = await interaction.followup.send(f"Ligando {config['nome']}, aguarde...", wait=True)
 
     for _ in range(MC_BOOT_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
         await asyncio.sleep(MC_BOOT_CHECK_INTERVAL)
         if await asyncio.to_thread(_mc_servidor_pronto, config):
             info = await asyncio.to_thread(_mc_info_conexao, config)
-            await interaction.edit_original_response(
-                content=f"{config['nome']} ligado e pronto para conexoes!{info}"
-            )
+            await mensagem.edit(content=f"{config['nome']} ligado e pronto para conexoes!{info}")
             return
 
-    await interaction.edit_original_response(
+    await mensagem.edit(
         content=f"{config['nome']} esta demorando mais que o esperado para subir. Use /status para verificar."
     )
 
 
-@tree.command(name="mc_desligar", description="Desliga um servidor de Minecraft")
-@app_commands.describe(servidor="Qual servidor desligar")
-@app_commands.choices(servidor=SERVIDOR_CHOICES)
-async def mc_desligar(interaction: discord.Interaction, servidor: app_commands.Choice[str]):
-    config = MC_SERVERS[servidor.value]
+async def _mc_acao_desligar(interaction: discord.Interaction, config: dict) -> None:
     await interaction.response.defer()
 
     processo = await asyncio.to_thread(_mc_processo, config)
@@ -966,19 +1137,15 @@ async def mc_desligar(interaction: discord.Interaction, servidor: app_commands.C
     await interaction.followup.send(mensagem)
 
 
-@tree.command(name="mc_reiniciar", description="Reinicia um servidor de Minecraft")
-@app_commands.describe(servidor="Qual servidor reiniciar")
-@app_commands.choices(servidor=SERVIDOR_CHOICES)
-async def mc_reiniciar(interaction: discord.Interaction, servidor: app_commands.Choice[str]):
-    config = MC_SERVERS[servidor.value]
+async def _mc_acao_reiniciar(interaction: discord.Interaction, config: dict) -> None:
     await interaction.response.defer()
 
     processo = await asyncio.to_thread(_mc_processo, config)
     if processo is None:
-        await interaction.followup.send(f"{config['nome']} nao esta rodando. Use /mc_ligar para liga-lo.")
+        await interaction.followup.send(f"{config['nome']} nao esta rodando. Use o botao Ligar.")
         return
 
-    await interaction.followup.send(f"Reiniciando {config['nome']} (salvando o mundo)...")
+    mensagem = await interaction.followup.send(f"Reiniciando {config['nome']} (salvando o mundo)...", wait=True)
     processo.terminate()
 
     for _ in range(MC_SHUTDOWN_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
@@ -986,7 +1153,7 @@ async def mc_reiniciar(interaction: discord.Interaction, servidor: app_commands.
         if not await asyncio.to_thread(_mc_servidor_rodando, config):
             break
     else:
-        await interaction.edit_original_response(
+        await mensagem.edit(
             content=f"{config['nome']} esta demorando para desligar. Tente novamente em instantes."
         )
         return
@@ -999,26 +1166,49 @@ async def mc_reiniciar(interaction: discord.Interaction, servidor: app_commands.
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    await interaction.edit_original_response(content=f"{config['nome']} desligou, ligando de novo, aguarde...")
+    await mensagem.edit(content=f"{config['nome']} desligou, ligando de novo, aguarde...")
 
     for _ in range(MC_BOOT_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
         await asyncio.sleep(MC_BOOT_CHECK_INTERVAL)
         if await asyncio.to_thread(_mc_servidor_pronto, config):
             info = await asyncio.to_thread(_mc_info_conexao, config)
-            await interaction.edit_original_response(
-                content=f"{config['nome']} reiniciado e pronto para conexoes!{info}"
-            )
+            await mensagem.edit(content=f"{config['nome']} reiniciado e pronto para conexoes!{info}")
             return
 
-    await interaction.edit_original_response(
+    await mensagem.edit(
         content=f"{config['nome']} esta demorando mais que o esperado para subir. Use /status para verificar."
     )
 
 
-@tree.command(name="llm_ligar", description="Liga a LLM local (LM Studio)")
-@app_commands.describe(modelo="Qual modelo carregar (padrao: o ultimo usado)")
-@app_commands.autocomplete(modelo=_llm_autocomplete_modelo)
-async def llm_ligar(interaction: discord.Interaction, modelo: str | None = None):
+class BotoesMC(discord.ui.View):
+    def __init__(self, config: dict):
+        super().__init__(timeout=60)
+        self.config = config
+
+    @discord.ui.button(label="Ligar", style=discord.ButtonStyle.success)
+    async def ligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _mc_acao_ligar(interaction, self.config)
+
+    @discord.ui.button(label="Desligar", style=discord.ButtonStyle.danger)
+    async def desligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _mc_acao_desligar(interaction, self.config)
+
+    @discord.ui.button(label="Reiniciar", style=discord.ButtonStyle.secondary)
+    async def reiniciar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _mc_acao_reiniciar(interaction, self.config)
+
+
+@tree.command(name="mc", description="Controla um servidor de Minecraft (ligar, desligar, reiniciar)")
+@app_commands.describe(servidor="Qual servidor")
+@app_commands.choices(servidor=SERVIDOR_CHOICES)
+async def mc(interaction: discord.Interaction, servidor: app_commands.Choice[str]):
+    config = MC_SERVERS[servidor.value]
+    await interaction.response.send_message(
+        f"O que voce quer fazer com o **{config['nome']}**?", view=BotoesMC(config)
+    )
+
+
+async def _llm_acao_ligar(interaction: discord.Interaction, modelo: str | None = None) -> None:
     global LLM_MODELO
     await interaction.response.defer()
 
@@ -1055,8 +1245,7 @@ async def llm_ligar(interaction: discord.Interaction, modelo: str | None = None)
     await interaction.followup.send(f"LLM local ligada com o modelo `{modelo_escolhido}` e pronta para uso.")
 
 
-@tree.command(name="llm_desligar", description="Desliga a LLM local (LM Studio)")
-async def llm_desligar(interaction: discord.Interaction):
+async def _llm_acao_desligar(interaction: discord.Interaction) -> None:
     await interaction.response.defer()
 
     if not await asyncio.to_thread(_llm_servidor_rodando):
@@ -1068,8 +1257,7 @@ async def llm_desligar(interaction: discord.Interaction):
     await interaction.followup.send("LLM local desligada.")
 
 
-@tree.command(name="ajuda_llm", description="Explica como funciona a interacao com a LLM local")
-async def ajuda_llm(interaction: discord.Interaction):
+async def _llm_acao_ajuda(interaction: discord.Interaction) -> None:
     await interaction.response.defer()
     embed = discord.Embed(title="Como funciona a LLM local", color=discord.Color.purple())
     embed.add_field(
@@ -1085,16 +1273,16 @@ async def ajuda_llm(interaction: discord.Interaction):
         name="Memoria de conversa",
         value=(
             f"O bot lembra as ultimas {LLM_HISTORICO_MAX_MENSAGENS} mensagens de cada conversa "
-            "(por canal + pessoa). Use `/llm_esquecer` para comecar uma conversa do zero."
+            "(por canal + pessoa). Use o botao Esquecer para comecar uma conversa do zero."
         ),
         inline=False,
     )
     embed.add_field(
         name="Ligar/desligar/trocar",
         value=(
-            f"`/llm_ligar` carrega o modelo (`{LLM_MODELO}`) e liga o servidor local. "
-            "`/llm_desligar` desliga tudo e libera a RAM usada. "
-            "`/llm_trocar` troca o modelo sem desligar o servidor."
+            f"O botao Ligar carrega o modelo (`{LLM_MODELO}`) e liga o servidor local. "
+            "Desligar desliga tudo e libera a RAM usada. "
+            "Trocar troca o modelo sem desligar o servidor."
         ),
         inline=False,
     )
@@ -1104,16 +1292,26 @@ async def ajuda_llm(interaction: discord.Interaction):
         linhas = [f"`{modelo}` - {LLM_DESCRICOES.get(modelo, 'Modelo geral.')}" for modelo in modelos]
         embed.add_field(name="Modelos disponiveis", value="\n".join(linhas), inline=False)
 
+    modelos_com_busca = sorted(m for m in modelos if m in LLM_MODELOS_COM_FERRAMENTAS)
+    if modelos_com_busca:
+        embed.add_field(
+            name="Busca na internet",
+            value=(
+                "Esses modelos conseguem buscar informacoes atuais na internet quando "
+                "a pergunta exigir:\n" + "\n".join(f"`{m}`" for m in modelos_com_busca)
+            ),
+            inline=False,
+        )
+
     embed.add_field(
         name="Se nao responder",
-        value="A LLM local precisa estar ligada (`/llm_ligar`) para o bot conseguir responder. Confira com `/status`.",
+        value="A LLM local precisa estar ligada (botao Ligar) para o bot conseguir responder. Confira com `/status`.",
         inline=False,
     )
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="llm_esquecer", description="Limpa a memoria da sua conversa atual com a LLM")
-async def llm_esquecer(interaction: discord.Interaction):
+async def _llm_acao_esquecer(interaction: discord.Interaction) -> None:
     guild_id = interaction.guild.id if interaction.guild else None
     chave = (guild_id, interaction.channel.id, interaction.user.id)
     existia = _llm_historico.pop(chave, None) is not None
@@ -1124,15 +1322,12 @@ async def llm_esquecer(interaction: discord.Interaction):
         await interaction.response.send_message("Voce ainda nao tinha conversa guardada aqui.", ephemeral=True)
 
 
-@tree.command(name="llm_trocar", description="Troca o modelo da LLM local, sem desligar o servidor")
-@app_commands.describe(modelo="Novo modelo a carregar")
-@app_commands.autocomplete(modelo=_llm_autocomplete_modelo)
-async def llm_trocar(interaction: discord.Interaction, modelo: str):
+async def _llm_acao_trocar(interaction: discord.Interaction, modelo: str) -> None:
     global LLM_MODELO
     await interaction.response.defer()
 
     if not await asyncio.to_thread(_llm_servidor_rodando):
-        await interaction.followup.send("A LLM local esta desligada. Use /llm_ligar para escolher o modelo.")
+        await interaction.followup.send("A LLM local esta desligada. Use o botao Ligar primeiro.")
         return
 
     await asyncio.to_thread(subprocess.run, [LMS_CLI, "unload", "--all"], capture_output=True, text=True)
@@ -1147,6 +1342,59 @@ async def llm_trocar(interaction: discord.Interaction, modelo: str):
 
     LLM_MODELO = modelo
     await interaction.followup.send(f"Modelo trocado para `{modelo}`.")
+
+
+class SelecionarModeloLLM(discord.ui.View):
+    def __init__(self, modelos: list[str]):
+        super().__init__(timeout=60)
+        select = discord.ui.Select(
+            placeholder="Escolha o modelo",
+            options=[discord.SelectOption(label=modelo, value=modelo) for modelo in modelos[:25]],
+        )
+        select.callback = self._escolhido
+        self.add_item(select)
+
+    async def _escolhido(self, interaction: discord.Interaction):
+        modelo = interaction.data["values"][0]
+        await _llm_acao_trocar(interaction, modelo)
+
+
+class BotoesLLM(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="Ligar", style=discord.ButtonStyle.success)
+    async def ligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _llm_acao_ligar(interaction)
+
+    @discord.ui.button(label="Desligar", style=discord.ButtonStyle.danger)
+    async def desligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _llm_acao_desligar(interaction)
+
+    @discord.ui.button(label="Trocar modelo", style=discord.ButtonStyle.primary)
+    async def trocar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        modelos = await asyncio.to_thread(_llm_modelos_disponiveis)
+        if not modelos:
+            await interaction.response.send_message("Nenhum modelo encontrado.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Escolha o modelo para carregar:", view=SelecionarModeloLLM(modelos), ephemeral=True
+        )
+
+    @discord.ui.button(label="Esquecer conversa", style=discord.ButtonStyle.secondary)
+    async def esquecer(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _llm_acao_esquecer(interaction)
+
+    @discord.ui.button(label="Ajuda", style=discord.ButtonStyle.secondary)
+    async def ajuda(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _llm_acao_ajuda(interaction)
+
+
+@tree.command(name="llm", description="Controla a LLM local (ligar, desligar, trocar, esquecer, ajuda)")
+async def llm(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "O que voce quer fazer com a LLM local?", view=BotoesLLM(), ephemeral=True
+    )
 
 
 @tree.command(name="desligar", description="Desliga o bot (apenas o dono)")
