@@ -87,7 +87,7 @@ async def _status_acao_minecraft(interaction: discord.Interaction) -> None:
             linhas.append(f"**RAM:** {ram_mb}MB")
 
         if pronto:
-            jogadores = _mc_jogadores_online(config)
+            jogadores = await asyncio.to_thread(_mc_jogadores_online, config)
             if jogadores:
                 linhas.append(f"**Jogadores:** {jogadores}")
 

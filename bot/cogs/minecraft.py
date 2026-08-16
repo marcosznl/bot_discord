@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import re
+import socket
+import ssl
 import subprocess
 import time
 
@@ -383,8 +385,44 @@ def _mc_info_conexao(config) -> str:
     return ""
 
 
+class _RconThreadSafe(MCRcon):
+    """MCRcon registra um handler de SIGALRM (no __init__) e usa
+    signal.alarm() (no _read) para o timeout de leitura - os dois so
+    funcionam na thread principal do processo, entao chamado de dentro
+    de asyncio.to_thread (thread separada) derruba com ValueError. Aqui
+    a mesma protecao de timeout e feita via socket (settimeout), que
+    funciona em qualquer thread, permitindo rodar o RCON em background
+    sem travar o resto do bot enquanto espera resposta do servidor de
+    Minecraft."""
+
+    def __init__(self, host, password, port=25575, tlsmode=0, timeout=5):
+        self.host = host
+        self.password = password
+        self.port = port
+        self.tlsmode = tlsmode
+        self.timeout = timeout
+
+    def connect(self):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.settimeout(self.timeout)
+        if self.tlsmode > 0:
+            ctx = ssl.create_default_context()
+            if self.tlsmode > 1:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            self.socket = ctx.wrap_socket(self.socket, server_hostname=self.host)
+        self.socket.connect((self.host, self.port))
+        self._send(3, self.password)
+
+    def _read(self, length):
+        data = b""
+        while len(data) < length:
+            data += self.socket.recv(length - len(data))
+        return data
+
+
 def _mc_rcon_comando(config: dict, comando: str) -> str:
-    with MCRcon("127.0.0.1", MC_RCON_SENHA, port=config["rcon_port"]) as mcr:
+    with _RconThreadSafe("127.0.0.1", MC_RCON_SENHA, port=config["rcon_port"]) as mcr:
         return mcr.command(comando)
 
 
@@ -396,9 +434,7 @@ async def _mc_acao_comando(interaction: discord.Interaction, config: dict, coman
         return
 
     try:
-        # Chamado direto (sem asyncio.to_thread): a lib mcrcon usa signal.alarm
-        # para o timeout, que so funciona na thread principal.
-        resposta = _mc_rcon_comando(config, comando)
+        resposta = await asyncio.to_thread(_mc_rcon_comando, config, comando)
     except Exception as erro:
         logger.error(f"Erro ao executar comando RCON em {config['nome']}: {erro}")
         await interaction.followup.send(f"Nao consegui executar o comando em {config['nome']}.")
