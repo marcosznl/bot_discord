@@ -7,6 +7,7 @@ from discord.ext import commands
 
 from bot.config import BASE_DIR
 from bot.jsonstore import escrever_json, ler_json
+from bot.permissions import requer_manage_guild
 
 # Configuracao de boas-vindas por servidor (canal + mensagem), definida pelo
 # comando /boasvindas e guardada em BOAS_VINDAS_CONFIG_PATH - nao precisa
@@ -115,12 +116,9 @@ class BoasVindas(commands.Cog):
         await canal.send(texto)
 
     @app_commands.command(name="boasvindas", description="Configura a mensagem de boas-vindas para novos membros")
+    @app_commands.guild_only()
     async def boasvindas(self, interaction: discord.Interaction):
-        if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "Voce precisa estar em um servidor e ter a permissao Gerenciar Servidor para usar esse comando.",
-                ephemeral=True,
-            )
+        if not await requer_manage_guild(interaction, "esse comando"):
             return
 
         await interaction.response.send_message(

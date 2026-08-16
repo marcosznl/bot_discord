@@ -25,6 +25,7 @@ class Diversao(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="gif", description="Busca um gif pela palavra-chave")
+    @app_commands.guild_only()
     @app_commands.describe(busca="Palavra-chave para buscar o gif")
     async def gif(self, interaction: discord.Interaction, busca: str):
         await interaction.response.defer()
@@ -37,6 +38,7 @@ class Diversao(commands.Cog):
         await interaction.followup.send(gif_url)
 
     @app_commands.command(name="socao", description="Da um socao (com gif de anime) em alguem")
+    @app_commands.guild_only()
     @app_commands.describe(pessoa="Quem vai levar o socao")
     async def socao(self, interaction: discord.Interaction, pessoa: discord.Member):
         await interaction.response.defer()
@@ -53,6 +55,7 @@ class Diversao(commands.Cog):
         )
 
     @app_commands.command(name="abraco", description="Da um abraco (com gif de anime) em alguem")
+    @app_commands.guild_only()
     @app_commands.describe(pessoa="Quem vai levar o abraco")
     async def abraco(self, interaction: discord.Interaction, pessoa: discord.Member):
         await interaction.response.defer()
@@ -69,6 +72,7 @@ class Diversao(commands.Cog):
         )
 
     @app_commands.command(name="charme", description="Joga um charme (com gif de anime) para alguem")
+    @app_commands.guild_only()
     @app_commands.describe(pessoa="Para quem jogar o charme")
     async def charme(self, interaction: discord.Interaction, pessoa: discord.Member):
         await interaction.response.defer()

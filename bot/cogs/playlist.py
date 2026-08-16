@@ -7,11 +7,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot import sqlitestore
 from bot.config import DATA_DIR
 from bot.cogs.musica import (
     ModalVolumeMusica,
     _filas_musica,
     _formatar_duracao_musica,
+    _lock_musica,
     _musica_acao_anterior,
     _musica_acao_continuar,
     _musica_acao_fila,
@@ -46,46 +48,39 @@ def _playlist_conectar_bd():
 
 
 def _playlist_adicionar(user_id: int, playlist: str, titulo: str, busca: str, duracao: int | None) -> None:
-    with _playlist_conectar_bd() as conexao:
-        conexao.execute(
-            "INSERT INTO playlist_musicas (user_id, playlist, titulo, busca, duracao) VALUES (?, ?, ?, ?, ?)",
-            (user_id, playlist, titulo, busca, duracao),
-        )
-        conexao.commit()
+    sqlitestore.executar(
+        _playlist_conectar_bd,
+        "INSERT INTO playlist_musicas (user_id, playlist, titulo, busca, duracao) VALUES (?, ?, ?, ?, ?)",
+        (user_id, playlist, titulo, busca, duracao),
+    )
 
 
 def _playlist_listar(user_id: int) -> list[tuple[str, int]]:
-    with _playlist_conectar_bd() as conexao:
-        cursor = conexao.execute(
-            "SELECT playlist, COUNT(*) FROM playlist_musicas WHERE user_id = ? GROUP BY playlist ORDER BY playlist",
-            (user_id,),
-        )
-        return cursor.fetchall()
+    return sqlitestore.consultar_todos(
+        _playlist_conectar_bd,
+        "SELECT playlist, COUNT(*) FROM playlist_musicas WHERE user_id = ? GROUP BY playlist ORDER BY playlist",
+        (user_id,),
+    )
 
 
 def _playlist_musicas(user_id: int, playlist: str) -> list[tuple[int, str, str, int | None]]:
-    with _playlist_conectar_bd() as conexao:
-        cursor = conexao.execute(
-            "SELECT rowid, titulo, busca, duracao FROM playlist_musicas WHERE user_id = ? AND playlist = ?",
-            (user_id, playlist),
-        )
-        return cursor.fetchall()
+    return sqlitestore.consultar_todos(
+        _playlist_conectar_bd,
+        "SELECT rowid, titulo, busca, duracao FROM playlist_musicas WHERE user_id = ? AND playlist = ?",
+        (user_id, playlist),
+    )
 
 
 def _playlist_remover_musica(rowid: int) -> None:
-    with _playlist_conectar_bd() as conexao:
-        conexao.execute("DELETE FROM playlist_musicas WHERE rowid = ?", (rowid,))
-        conexao.commit()
+    sqlitestore.executar(_playlist_conectar_bd, "DELETE FROM playlist_musicas WHERE rowid = ?", (rowid,))
 
 
 def _playlist_apagar(user_id: int, playlist: str) -> int:
-    with _playlist_conectar_bd() as conexao:
-        cursor = conexao.execute(
-            "DELETE FROM playlist_musicas WHERE user_id = ? AND playlist = ?",
-            (user_id, playlist),
-        )
-        conexao.commit()
-        return cursor.rowcount
+    return sqlitestore.executar_retornando_rowcount(
+        _playlist_conectar_bd,
+        "DELETE FROM playlist_musicas WHERE user_id = ? AND playlist = ?",
+        (user_id, playlist),
+    )
 
 
 async def _playlist_acao_adicionar(interaction: discord.Interaction, nome: str, busca: str) -> None:
@@ -134,11 +129,12 @@ async def _playlist_acao_tocar(interaction: discord.Interaction, nome: str) -> N
     elif voice_client.channel != canal_voz:
         await voice_client.move_to(canal_voz)
 
-    fila = _filas_musica.setdefault(interaction.guild.id, [])
-    fila.extend((titulo, busca, duracao) for _, titulo, busca, duracao in musicas)
+    async with _lock_musica(interaction.guild.id):
+        fila = _filas_musica.setdefault(interaction.guild.id, [])
+        fila.extend((titulo, busca, duracao) for _, titulo, busca, duracao in musicas)
 
-    if not voice_client.is_playing() and not voice_client.is_paused():
-        await asyncio.to_thread(_tocar_proximo, interaction.guild.id, voice_client)
+        if not voice_client.is_playing() and not voice_client.is_paused():
+            await asyncio.to_thread(_tocar_proximo, interaction.guild.id, voice_client)
 
     linhas = [
         f"{posicao}. {titulo} ({_formatar_duracao_musica(duracao)})"
@@ -373,6 +369,7 @@ class Playlist(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="playlist", description="Crie, toque, edite e apague suas playlists de musica salvas")
+    @app_commands.guild_only()
     async def playlist(self, interaction: discord.Interaction):
         await interaction.response.send_message(
             "O que voce quer fazer com suas playlists?", view=BotoesPlaylist(), ephemeral=True

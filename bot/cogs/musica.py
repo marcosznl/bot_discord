@@ -32,6 +32,15 @@ _repetir_musica: dict[int, str] = {}  # guild_id -> "atual", "fila" ou ausente (
 _historico_musica: dict[int, list[tuple[str, str, int | None]]] = {}
 _pular_avanco_historico: dict[int, bool] = {}
 _ocioso_desde: dict[int, float] = {}
+_locks_musica: dict[int, asyncio.Lock] = {}
+
+
+def _lock_musica(guild_id: int) -> asyncio.Lock:
+    # Serializa o trecho "anexar na fila + decidir se toca agora" por
+    # servidor - sem isso, dois /musica tocar (ou /playlist tocar) quase
+    # simultaneos podem ambos ver "nao esta tocando" e chamar voice_client.play()
+    # duas vezes, o que derruba a segunda chamada com ClientException.
+    return _locks_musica.setdefault(guild_id, asyncio.Lock())
 
 
 def _ytdlp_buscar(busca: str) -> tuple[str, str, str, int | None]:
@@ -126,15 +135,17 @@ async def _musica_acao_tocar(interaction: discord.Interaction, busca: str) -> No
         await interaction.followup.send("Nao consegui encontrar essa musica.")
         return
 
-    fila = _filas_musica.setdefault(interaction.guild.id, [])
-    fila.append((titulo, busca, duracao))
     duracao_txt = _formatar_duracao_musica(duracao)
 
-    if not voice_client.is_playing() and not voice_client.is_paused():
-        await asyncio.to_thread(_tocar_proximo, interaction.guild.id, voice_client)
-        await interaction.followup.send(f"Tocando agora: {titulo} ({duracao_txt})")
-    else:
-        await interaction.followup.send(f"Adicionado na fila: {titulo} ({duracao_txt})")
+    async with _lock_musica(interaction.guild.id):
+        fila = _filas_musica.setdefault(interaction.guild.id, [])
+        fila.append((titulo, busca, duracao))
+
+        if not voice_client.is_playing() and not voice_client.is_paused():
+            await asyncio.to_thread(_tocar_proximo, interaction.guild.id, voice_client)
+            await interaction.followup.send(f"Tocando agora: {titulo} ({duracao_txt})")
+        else:
+            await interaction.followup.send(f"Adicionado na fila: {titulo} ({duracao_txt})")
 
 
 async def _musica_acao_pular(interaction: discord.Interaction) -> None:
@@ -278,10 +289,14 @@ class SelecionarRemoverFila(discord.ui.View):
     def __init__(self, guild_id: int, fila: list[tuple[str, str, int | None]]):
         super().__init__(timeout=600)
         self.guild_id = guild_id
+        # Guarda o titulo esperado em cada posicao para conferir na hora de
+        # remover - esse menu fica disponivel por ate 600s, tempo suficiente
+        # para a fila mudar (musica avancou, foi embaralhada) e o indice
+        # escolhido passar a apontar para outra musica.
+        self._titulos_esperados = {indice: titulo for indice, (titulo, _, _) in enumerate(fila) if indice > 0}
         opcoes = [
             discord.SelectOption(label=titulo[:100], value=str(indice))
-            for indice, (titulo, _, _) in enumerate(fila)
-            if indice > 0
+            for indice, titulo in self._titulos_esperados.items()
         ][:25]
         select = discord.ui.Select(placeholder="Escolha a musica para remover", options=opcoes)
         select.callback = self._escolhido
@@ -289,8 +304,9 @@ class SelecionarRemoverFila(discord.ui.View):
 
     async def _escolhido(self, interaction: discord.Interaction):
         indice = int(interaction.data["values"][0])
+        titulo_esperado = self._titulos_esperados.get(indice)
         fila = _filas_musica.get(self.guild_id, [])
-        if indice < len(fila):
+        if titulo_esperado is not None and indice < len(fila) and fila[indice][0] == titulo_esperado:
             titulo, _, _ = fila.pop(indice)
             await interaction.response.edit_message(content=f"Removido da fila: {titulo}", view=None)
         else:
@@ -408,6 +424,7 @@ class Musica(commands.Cog):
                 await voice_client.disconnect()
 
     @app_commands.command(name="musica", description="Controla a reproducao de musica")
+    @app_commands.guild_only()
     async def musica(self, interaction: discord.Interaction):
         await interaction.response.send_message(
             "O que voce quer fazer com a musica?", view=BotoesMusica()

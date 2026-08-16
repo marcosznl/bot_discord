@@ -9,7 +9,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from bot import sqlitestore
 from bot.config import DATA_DIR
+from bot.permissions import requer_manage_guild
 
 logger = logging.getLogger(__name__)
 
@@ -54,23 +56,21 @@ def _xp_conectar_bd() -> sqlite3.Connection:
 
 
 def _xp_ativo(guild_id: int) -> bool:
-    with _xp_conectar_bd() as conexao:
-        linha = conexao.execute(
-            "SELECT 1 FROM xp_desativado WHERE guild_id = ?", (guild_id,)
-        ).fetchone()
+    linha = sqlitestore.consultar_um(
+        _xp_conectar_bd, "SELECT 1 FROM xp_desativado WHERE guild_id = ?", (guild_id,)
+    )
     return linha is None
 
 
 def _xp_definir_ativo(guild_id: int, ativo: bool) -> None:
-    with _xp_conectar_bd() as conexao:
-        if ativo:
-            conexao.execute("DELETE FROM xp_desativado WHERE guild_id = ?", (guild_id,))
-        else:
-            conexao.execute(
-                "INSERT INTO xp_desativado (guild_id) VALUES (?) ON CONFLICT (guild_id) DO NOTHING",
-                (guild_id,),
-            )
-        conexao.commit()
+    if ativo:
+        sqlitestore.executar(_xp_conectar_bd, "DELETE FROM xp_desativado WHERE guild_id = ?", (guild_id,))
+    else:
+        sqlitestore.executar(
+            _xp_conectar_bd,
+            "INSERT INTO xp_desativado (guild_id) VALUES (?) ON CONFLICT (guild_id) DO NOTHING",
+            (guild_id,),
+        )
 
 
 def _xp_total_ate_nivel(nivel: int) -> int:
@@ -95,10 +95,9 @@ def _xp_progresso(xp_total: int) -> tuple[int, int, int]:
 
 
 def _xp_obter(guild_id: int, user_id: int) -> int:
-    with _xp_conectar_bd() as conexao:
-        linha = conexao.execute(
-            "SELECT xp FROM xp_usuarios WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
-        ).fetchone()
+    linha = sqlitestore.consultar_um(
+        _xp_conectar_bd, "SELECT xp FROM xp_usuarios WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
+    )
     return linha[0] if linha else 0
 
 
@@ -123,28 +122,25 @@ def _xp_posicao(guild_id: int, user_id: int) -> int | None:
     xp_total = _xp_obter(guild_id, user_id)
     if xp_total <= 0:
         return None
-    with _xp_conectar_bd() as conexao:
-        maiores = conexao.execute(
-            "SELECT COUNT(*) FROM xp_usuarios WHERE guild_id = ? AND xp > ?", (guild_id, xp_total)
-        ).fetchone()[0]
+    maiores = sqlitestore.consultar_um(
+        _xp_conectar_bd, "SELECT COUNT(*) FROM xp_usuarios WHERE guild_id = ? AND xp > ?", (guild_id, xp_total)
+    )[0]
     return maiores + 1
 
 
 def _xp_leaderboard_semana(guild_id: int, limite: int = 10) -> list[tuple[int, int]]:
-    with _xp_conectar_bd() as conexao:
-        linhas = conexao.execute(
-            "SELECT user_id, xp_semana FROM xp_usuarios WHERE guild_id = ? AND xp_semana > 0 "
-            "ORDER BY xp_semana DESC LIMIT ?",
-            (guild_id, limite),
-        ).fetchall()
-    return linhas
+    return sqlitestore.consultar_todos(
+        _xp_conectar_bd,
+        "SELECT user_id, xp_semana FROM xp_usuarios WHERE guild_id = ? AND xp_semana > 0 "
+        "ORDER BY xp_semana DESC LIMIT ?",
+        (guild_id, limite),
+    )
 
 
 def _xp_esta_fora(guild_id: int, user_id: int) -> bool:
-    with _xp_conectar_bd() as conexao:
-        linha = conexao.execute(
-            "SELECT 1 FROM xp_optout WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
-        ).fetchone()
+    linha = sqlitestore.consultar_um(
+        _xp_conectar_bd, "SELECT 1 FROM xp_optout WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
+    )
     return linha is not None
 
 
@@ -171,8 +167,7 @@ def _xp_semana_atual() -> str:
 
 
 def _xp_semana_guardada(guild_id: int) -> str | None:
-    with _xp_conectar_bd() as conexao:
-        linha = conexao.execute("SELECT semana FROM xp_periodo WHERE guild_id = ?", (guild_id,)).fetchone()
+    linha = sqlitestore.consultar_um(_xp_conectar_bd, "SELECT semana FROM xp_periodo WHERE guild_id = ?", (guild_id,))
     return linha[0] if linha else None
 
 
@@ -188,12 +183,11 @@ def _xp_resetar_semana(guild_id: int) -> None:
 
 
 def _xp_leaderboard(guild_id: int, limite: int = 10) -> list[tuple[int, int]]:
-    with _xp_conectar_bd() as conexao:
-        linhas = conexao.execute(
-            "SELECT user_id, xp FROM xp_usuarios WHERE guild_id = ? ORDER BY xp DESC LIMIT ?",
-            (guild_id, limite),
-        ).fetchall()
-    return linhas
+    return sqlitestore.consultar_todos(
+        _xp_conectar_bd,
+        "SELECT user_id, xp FROM xp_usuarios WHERE guild_id = ? ORDER BY xp DESC LIMIT ?",
+        (guild_id, limite),
+    )
 
 
 def _xp_resetar_servidor(guild_id: int) -> int:
@@ -209,34 +203,33 @@ def _xp_resetar_servidor(guild_id: int) -> int:
 
 
 def _xp_cargo_definir(guild_id: int, nivel: int, role_id: int) -> None:
-    with _xp_conectar_bd() as conexao:
-        conexao.execute(
-            "INSERT INTO xp_cargos (guild_id, nivel, role_id) VALUES (?, ?, ?) "
-            "ON CONFLICT (guild_id, nivel) DO UPDATE SET role_id = excluded.role_id",
-            (guild_id, nivel, role_id),
-        )
-        conexao.commit()
+    sqlitestore.executar(
+        _xp_conectar_bd,
+        "INSERT INTO xp_cargos (guild_id, nivel, role_id) VALUES (?, ?, ?) "
+        "ON CONFLICT (guild_id, nivel) DO UPDATE SET role_id = excluded.role_id",
+        (guild_id, nivel, role_id),
+    )
 
 
 def _xp_cargo_remover(guild_id: int, nivel: int) -> bool:
-    with _xp_conectar_bd() as conexao:
-        cursor = conexao.execute("DELETE FROM xp_cargos WHERE guild_id = ? AND nivel = ?", (guild_id, nivel))
-        conexao.commit()
-        return cursor.rowcount > 0
+    return (
+        sqlitestore.executar_retornando_rowcount(
+            _xp_conectar_bd, "DELETE FROM xp_cargos WHERE guild_id = ? AND nivel = ?", (guild_id, nivel)
+        )
+        > 0
+    )
 
 
 def _xp_cargos_listar(guild_id: int) -> list[tuple[int, int]]:
-    with _xp_conectar_bd() as conexao:
-        return conexao.execute(
-            "SELECT nivel, role_id FROM xp_cargos WHERE guild_id = ? ORDER BY nivel", (guild_id,)
-        ).fetchall()
+    return sqlitestore.consultar_todos(
+        _xp_conectar_bd, "SELECT nivel, role_id FROM xp_cargos WHERE guild_id = ? ORDER BY nivel", (guild_id,)
+    )
 
 
 def _xp_cargo_do_nivel(guild_id: int, nivel: int) -> int | None:
-    with _xp_conectar_bd() as conexao:
-        linha = conexao.execute(
-            "SELECT role_id FROM xp_cargos WHERE guild_id = ? AND nivel = ?", (guild_id, nivel)
-        ).fetchone()
+    linha = sqlitestore.consultar_um(
+        _xp_conectar_bd, "SELECT role_id FROM xp_cargos WHERE guild_id = ? AND nivel = ?", (guild_id, nivel)
+    )
     return linha[0] if linha else None
 
 
@@ -522,11 +515,7 @@ class BotoesXPConfig(discord.ui.View):
 
 
 async def _xp_acao_config(interaction: discord.Interaction) -> None:
-    if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message(
-            "Voce precisa estar em um servidor e ter a permissao Gerenciar Servidor para usar essa opcao.",
-            ephemeral=True,
-        )
+    if not await requer_manage_guild(interaction):
         return
 
     await interaction.response.send_message(
@@ -664,6 +653,7 @@ class XP(commands.Cog):
                 await asyncio.to_thread(_xp_resetar_semana, guild.id)
 
     @app_commands.command(name="xp", description="Ve seu rank, o leaderboard do servidor ou configura o sistema de XP")
+    @app_commands.guild_only()
     async def xp(self, interaction: discord.Interaction):
         await interaction.response.send_message(
             "O que voce quer fazer com o sistema de XP?", view=BotoesXP()

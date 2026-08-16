@@ -25,7 +25,8 @@ from bot.config import (
     MC_SHUTDOWN_TIMEOUT,
 )
 from bot.jsonstore import escrever_json, ler_json
-from bot.ram import _ram_suficiente_para
+from bot.permissions import requer_manage_guild
+from bot.ram import _ram_verificar_ou_mensagem
 
 logger = logging.getLogger(__name__)
 
@@ -500,27 +501,19 @@ async def _mc_acao_editar(
     )
 
 
-async def _mc_acao_ligar(interaction: discord.Interaction, config: dict) -> None:
-    await interaction.response.defer()
+_mc_locks: dict[str, asyncio.Lock] = {}
 
-    necessaria_gb = config.get("ram_gb", 2)
-    suficiente, disponivel = await asyncio.to_thread(_ram_suficiente_para, necessaria_gb)
-    if not suficiente:
-        await interaction.followup.send(
-            f"Nao ha RAM suficiente para ligar {config['nome']} agora "
-            f"(precisa de ~{necessaria_gb}GB, tem {disponivel:.1f}GB disponivel)."
-        )
-        return
 
-    if await asyncio.to_thread(_mc_servidor_rodando, config):
-        if await asyncio.to_thread(_mc_servidor_pronto, config):
-            info = await asyncio.to_thread(_mc_info_conexao, config)
-            await interaction.followup.send(f"{config['nome']} ja esta ligado e pronto para conexoes.{info}")
-        else:
-            await interaction.followup.send(f"{config['nome']} ja esta ligando, aguarde.")
-        return
+def _mc_lock(chave: str) -> asyncio.Lock:
+    # Serializa ligar/reiniciar por servidor - sem isso, dois cliques rapidos
+    # podem ambos passar pela checagem de "ja esta rodando" (que so detecta o
+    # processo via psutil, com atraso logo apos o Popen) e subir dois
+    # processos java para o mesmo mundo.
+    return _mc_locks.setdefault(chave, asyncio.Lock())
 
-    subprocess.Popen(
+
+def _mc_iniciar_processo(config: dict) -> None:
+    processo = subprocess.Popen(
         _mc_comando_execucao(config),
         cwd=config["dir"],
         stdin=subprocess.DEVNULL,
@@ -528,18 +521,44 @@ async def _mc_acao_ligar(interaction: discord.Interaction, config: dict) -> None
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    mensagem = await interaction.followup.send(f"Ligando {config['nome']}, aguarde...", wait=True)
+    # Sem isso o processo vira zumbi quando o servidor de Minecraft e
+    # desligado/crasha, ja que ninguem mais chama wait() nele.
+    asyncio.create_task(asyncio.to_thread(processo.wait))
 
+
+async def _mc_aguardar_pronto(mensagem: discord.Message, config: dict, mensagem_pronto: str) -> None:
     for _ in range(MC_BOOT_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
         await asyncio.sleep(MC_BOOT_CHECK_INTERVAL)
         if await asyncio.to_thread(_mc_servidor_pronto, config):
             info = await asyncio.to_thread(_mc_info_conexao, config)
-            await mensagem.edit(content=f"{config['nome']} ligado e pronto para conexoes!{info}")
+            await mensagem.edit(content=f"{mensagem_pronto}{info}")
             return
 
     await mensagem.edit(
         content=f"{config['nome']} esta demorando mais que o esperado para subir. Use /status para verificar."
     )
+
+
+async def _mc_acao_ligar(interaction: discord.Interaction, config: dict) -> None:
+    await interaction.response.defer()
+
+    erro_ram = await _ram_verificar_ou_mensagem(config.get("ram_gb", 2), f"ligar {config['nome']}")
+    if erro_ram:
+        await interaction.followup.send(erro_ram)
+        return
+
+    async with _mc_lock(config["chave"]):
+        if await asyncio.to_thread(_mc_servidor_rodando, config):
+            if await asyncio.to_thread(_mc_servidor_pronto, config):
+                info = await asyncio.to_thread(_mc_info_conexao, config)
+                await interaction.followup.send(f"{config['nome']} ja esta ligado e pronto para conexoes.{info}")
+            else:
+                await interaction.followup.send(f"{config['nome']} ja esta ligando, aguarde.")
+            return
+
+        _mc_iniciar_processo(config)
+        mensagem = await interaction.followup.send(f"Ligando {config['nome']}, aguarde...", wait=True)
+        await _mc_aguardar_pronto(mensagem, config, f"{config['nome']} ligado e pronto para conexoes!")
 
 
 async def _mc_acao_desligar(interaction: discord.Interaction, config: dict) -> None:
@@ -563,45 +582,29 @@ async def _mc_acao_desligar(interaction: discord.Interaction, config: dict) -> N
 async def _mc_acao_reiniciar(interaction: discord.Interaction, config: dict) -> None:
     await interaction.response.defer()
 
-    processo = await asyncio.to_thread(_mc_processo, config)
-    if processo is None:
-        await interaction.followup.send(f"{config['nome']} nao esta rodando. Use o botao Ligar.")
-        return
-
-    mensagem = await interaction.followup.send(f"Reiniciando {config['nome']} (salvando o mundo)...", wait=True)
-    _mc_parada_esperada.add(config["chave"])
-    processo.terminate()
-
-    for _ in range(MC_SHUTDOWN_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
-        await asyncio.sleep(MC_BOOT_CHECK_INTERVAL)
-        if not await asyncio.to_thread(_mc_servidor_rodando, config):
-            break
-    else:
-        await mensagem.edit(
-            content=f"{config['nome']} esta demorando para desligar. Tente novamente em instantes."
-        )
-        return
-
-    subprocess.Popen(
-        _mc_comando_execucao(config),
-        cwd=config["dir"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    await mensagem.edit(content=f"{config['nome']} desligou, ligando de novo, aguarde...")
-
-    for _ in range(MC_BOOT_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
-        await asyncio.sleep(MC_BOOT_CHECK_INTERVAL)
-        if await asyncio.to_thread(_mc_servidor_pronto, config):
-            info = await asyncio.to_thread(_mc_info_conexao, config)
-            await mensagem.edit(content=f"{config['nome']} reiniciado e pronto para conexoes!{info}")
+    async with _mc_lock(config["chave"]):
+        processo = await asyncio.to_thread(_mc_processo, config)
+        if processo is None:
+            await interaction.followup.send(f"{config['nome']} nao esta rodando. Use o botao Ligar.")
             return
 
-    await mensagem.edit(
-        content=f"{config['nome']} esta demorando mais que o esperado para subir. Use /status para verificar."
-    )
+        mensagem = await interaction.followup.send(f"Reiniciando {config['nome']} (salvando o mundo)...", wait=True)
+        _mc_parada_esperada.add(config["chave"])
+        processo.terminate()
+
+        for _ in range(MC_SHUTDOWN_TIMEOUT // MC_BOOT_CHECK_INTERVAL):
+            await asyncio.sleep(MC_BOOT_CHECK_INTERVAL)
+            if not await asyncio.to_thread(_mc_servidor_rodando, config):
+                break
+        else:
+            await mensagem.edit(
+                content=f"{config['nome']} esta demorando para desligar. Tente novamente em instantes."
+            )
+            return
+
+        _mc_iniciar_processo(config)
+        await mensagem.edit(content=f"{config['nome']} desligou, ligando de novo, aguarde...")
+        await _mc_aguardar_pronto(mensagem, config, f"{config['nome']} reiniciado e pronto para conexoes!")
 
 
 class ModalComandoMC(discord.ui.Modal, title="Executar comando"):
@@ -687,21 +690,13 @@ class BotoesMC(discord.ui.View):
 
     @discord.ui.button(label="Comando", style=discord.ButtonStyle.primary)
     async def comando(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "Voce precisa estar em um servidor e ter a permissao Gerenciar Servidor para usar essa opcao.",
-                ephemeral=True,
-            )
+        if not await requer_manage_guild(interaction):
             return
         await interaction.response.send_modal(ModalComandoMC(self.config))
 
     @discord.ui.button(label="Editar", style=discord.ButtonStyle.secondary)
     async def editar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "Voce precisa estar em um servidor e ter a permissao Gerenciar Servidor para usar essa opcao.",
-                ephemeral=True,
-            )
+        if not await requer_manage_guild(interaction):
             return
         await interaction.response.send_modal(ModalEditarServidorMC(self.config))
 
@@ -795,6 +790,8 @@ class Minecraft(commands.Cog):
                     await canal.send(f"{config['nome']} foi desligado automaticamente por ficar {minutos} minutos sem jogadores.")
 
     @app_commands.command(name="mc", description="Controla servidores de Minecraft")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(servidor="Qual servidor")
     @app_commands.autocomplete(servidor=_mc_autocomplete_servidor)
     async def mc(self, interaction: discord.Interaction, servidor: str):

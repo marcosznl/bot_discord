@@ -25,6 +25,8 @@ class Admin(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="velocidade_server", description="Testa a velocidade da internet da maquina")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
     async def velocidade_server(self, interaction: discord.Interaction):
         if interaction.user.id != self.bot.owner_id:
             await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
@@ -54,6 +56,8 @@ class Admin(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="desligar", description="Desliga o bot (apenas o dono)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
     async def desligar(self, interaction: discord.Interaction):
         if interaction.user.id != self.bot.owner_id:
             await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
@@ -63,6 +67,8 @@ class Admin(commands.Cog):
         await self.bot.close()
 
     @app_commands.command(name="reiniciar", description="Reinicia o bot (apenas o dono)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
     async def reiniciar(self, interaction: discord.Interaction):
         if interaction.user.id != self.bot.owner_id:
             await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)

@@ -20,7 +20,7 @@ from bot.config import (
     LMS_CLI,
     LM_STUDIO_URL,
 )
-from bot.ram import _ram_suficiente_para
+from bot.ram import _ram_verificar_ou_mensagem
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ LLM_FERRAMENTA_BUSCA = {
 
 _llm_historico: dict[tuple[int | None, int, int], list[dict]] = {}
 _llm_ultima_interacao: float | None = None
+_llm_lock_auto_ligar = asyncio.Lock()
 
 
 def _llm_servidor_rodando() -> bool:
@@ -81,13 +82,16 @@ def _llm_ram_mb() -> int | None:
     return processo.memory_info().rss // (1024**2)
 
 
-def _llm_tamanho_gb(modelo: str) -> float | None:
+def _llm_modelos_info() -> list[dict]:
     resultado = subprocess.run([LMS_CLI, "ls", "--llm", "--json"], capture_output=True, text=True)
     try:
-        modelos = json.loads(resultado.stdout)
+        return json.loads(resultado.stdout)
     except json.JSONDecodeError:
-        return None
-    for info in modelos:
+        return []
+
+
+def _llm_tamanho_gb(modelo: str) -> float | None:
+    for info in _llm_modelos_info():
         if info.get("modelKey") == modelo:
             tamanho = info.get("sizeBytes")
             return tamanho / (1024**3) if tamanho else None
@@ -95,21 +99,11 @@ def _llm_tamanho_gb(modelo: str) -> float | None:
 
 
 def _llm_modelos_disponiveis() -> list[str]:
-    resultado = subprocess.run([LMS_CLI, "ls", "--llm", "--json"], capture_output=True, text=True)
-    try:
-        modelos = json.loads(resultado.stdout)
-    except json.JSONDecodeError:
-        return []
-    return [m["modelKey"] for m in modelos]
+    return [m["modelKey"] for m in _llm_modelos_info()]
 
 
 def _llm_parametros(modelo: str) -> str | None:
-    resultado = subprocess.run([LMS_CLI, "ls", "--llm", "--json"], capture_output=True, text=True)
-    try:
-        modelos = json.loads(resultado.stdout)
-    except json.JSONDecodeError:
-        return None
-    for info in modelos:
+    for info in _llm_modelos_info():
         if info.get("modelKey") == modelo:
             return info.get("paramsString")
     return None
@@ -181,28 +175,37 @@ async def _consultar_llm_local(historico: list[dict]) -> str:
     return "Nao consegui gerar uma resposta apos consultar a internet."
 
 
-async def _llm_auto_ligar() -> tuple[bool, str]:
-    tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, LLM_MODELO)
-    if tamanho_gb is not None:
-        suficiente, disponivel = _ram_suficiente_para(tamanho_gb)
-        if not suficiente:
-            return False, (
-                f"Nao ha RAM suficiente para ligar a LLM agora "
-                f"(precisa de ~{tamanho_gb:.1f}GB, tem {disponivel:.1f}GB disponivel)."
-            )
-
+async def _llm_carregar_modelo(modelo: str) -> bool:
     resultado = await asyncio.to_thread(
-        subprocess.run, [LMS_CLI, "load", LLM_MODELO, "-y"], capture_output=True, text=True
+        subprocess.run, [LMS_CLI, "load", modelo, "-y"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        logger.error(f"Erro ao carregar modelo da LLM (auto): {resultado.stderr}")
-        return False, "Nao consegui ligar a LLM local agora."
+        logger.error(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+        return False
+    return True
 
+
+async def _llm_iniciar_servidor() -> bool:
     resultado = await asyncio.to_thread(
         subprocess.run, [LMS_CLI, "server", "start"], capture_output=True, text=True
     )
     if resultado.returncode != 0:
-        logger.error(f"Erro ao iniciar servidor da LLM (auto): {resultado.stderr}")
+        logger.error(f"Erro ao iniciar servidor da LLM: {resultado.stderr}")
+        return False
+    return True
+
+
+async def _llm_auto_ligar() -> tuple[bool, str]:
+    tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, LLM_MODELO)
+    if tamanho_gb is not None:
+        erro_ram = await _ram_verificar_ou_mensagem(tamanho_gb, "ligar a LLM agora")
+        if erro_ram:
+            return False, erro_ram
+
+    if not await _llm_carregar_modelo(LLM_MODELO):
+        return False, "Nao consegui ligar a LLM local agora."
+
+    if not await _llm_iniciar_servidor():
         return False, "Modelo carregado, mas nao consegui ligar o servidor da LLM."
 
     return True, ""
@@ -219,11 +222,16 @@ async def _responder_llm(bot: commands.Bot, message: discord.Message) -> None:
         return
 
     if not await asyncio.to_thread(_llm_servidor_rodando):
-        async with message.channel.typing():
-            sucesso, motivo = await _llm_auto_ligar()
-        if not sucesso:
-            await message.channel.send(motivo)
-            return
+        async with _llm_lock_auto_ligar:
+            # Confere de novo depois de pegar o lock - outra mensagem pode ja
+            # ter ligado a LLM enquanto essa esperava, evitando dois "load"/
+            # "server start" concorrentes na mesma instancia do LM Studio.
+            if not await asyncio.to_thread(_llm_servidor_rodando):
+                async with message.channel.typing():
+                    sucesso, motivo = await _llm_auto_ligar()
+                if not sucesso:
+                    await message.channel.send(motivo)
+                    return
 
     _llm_ultima_interacao = time.time()
 
@@ -258,27 +266,16 @@ async def _llm_acao_ligar(interaction: discord.Interaction, modelo: str | None =
 
     tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, modelo_escolhido)
     if tamanho_gb is not None:
-        suficiente, disponivel = _ram_suficiente_para(tamanho_gb)
-        if not suficiente:
-            await interaction.followup.send(
-                f"Nao ha RAM suficiente para carregar `{modelo_escolhido}` agora "
-                f"(precisa de ~{tamanho_gb:.1f}GB, tem {disponivel:.1f}GB disponivel)."
-            )
+        erro_ram = await _ram_verificar_ou_mensagem(tamanho_gb, f"carregar `{modelo_escolhido}` agora")
+        if erro_ram:
+            await interaction.followup.send(erro_ram)
             return
 
-    resultado = await asyncio.to_thread(
-        subprocess.run, [LMS_CLI, "load", modelo_escolhido, "-y"], capture_output=True, text=True
-    )
-    if resultado.returncode != 0:
-        logger.error(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+    if not await _llm_carregar_modelo(modelo_escolhido):
         await interaction.followup.send("Nao consegui carregar o modelo da LLM.")
         return
 
-    resultado = await asyncio.to_thread(
-        subprocess.run, [LMS_CLI, "server", "start"], capture_output=True, text=True
-    )
-    if resultado.returncode != 0:
-        logger.error(f"Erro ao iniciar servidor da LLM: {resultado.stderr}")
+    if not await _llm_iniciar_servidor():
         await interaction.followup.send("Modelo carregado, mas nao consegui iniciar o servidor.")
         return
 
@@ -366,19 +363,12 @@ async def _llm_acao_trocar(interaction: discord.Interaction, modelo: str) -> Non
 
     tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, modelo)
     if tamanho_gb is not None:
-        suficiente, disponivel = _ram_suficiente_para(tamanho_gb)
-        if not suficiente:
-            await interaction.followup.send(
-                f"Nao ha RAM suficiente para trocar para `{modelo}` "
-                f"(precisa de ~{tamanho_gb:.1f}GB, tem {disponivel:.1f}GB disponivel)."
-            )
+        erro_ram = await _ram_verificar_ou_mensagem(tamanho_gb, f"trocar para `{modelo}`")
+        if erro_ram:
+            await interaction.followup.send(erro_ram)
             return
 
-    resultado = await asyncio.to_thread(
-        subprocess.run, [LMS_CLI, "load", modelo, "-y"], capture_output=True, text=True
-    )
-    if resultado.returncode != 0:
-        logger.error(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+    if not await _llm_carregar_modelo(modelo):
         await interaction.followup.send(f"Nao consegui carregar o modelo `{modelo}`.")
         return
 
@@ -469,6 +459,8 @@ class LLM(commands.Cog):
         logger.info(f"LLM local desligada automaticamente por ficar {minutos} minutos sem uso.")
 
     @app_commands.command(name="llm", description="Controla a LLM local")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     async def llm(self, interaction: discord.Interaction):
         await interaction.response.send_message(
             "O que voce quer fazer com a LLM local?", view=BotoesLLM(), ephemeral=True

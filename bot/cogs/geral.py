@@ -147,10 +147,12 @@ class Geral(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="ping", description="Testa se o bot esta online")
+    @app_commands.guild_only()
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.send_message("Pong!")
 
     @app_commands.command(name="limpar", description="Apaga mensagens recentes deste canal")
+    @app_commands.guild_only()
     @app_commands.describe(quantidade="Quantas mensagens apagar (1 a 200)")
     @app_commands.default_permissions(manage_messages=True)
     async def limpar(self, interaction: discord.Interaction, quantidade: app_commands.Range[int, 1, 200]):
@@ -159,6 +161,7 @@ class Geral(commands.Cog):
         await interaction.delete_original_response()
 
     @app_commands.command(name="ajuda", description="Mostra todos os comandos do bot, por categoria")
+    @app_commands.guild_only()
     async def ajuda(self, interaction: discord.Interaction):
         comandos_por_nome = _todos_comandos_registrados(self.bot)
 
@@ -175,6 +178,7 @@ class Geral(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="status", description="Mostra o status da maquina, servidores de Minecraft e LLM")
+    @app_commands.guild_only()
     async def status(self, interaction: discord.Interaction):
         await interaction.response.send_message("Qual status voce quer ver?", view=BotoesStatus())
 
