@@ -55,13 +55,11 @@ async def _status_acao_maquina(interaction: discord.Interaction) -> None:
         disk_path = "/"
     disk = psutil.disk_usage(disk_path)
 
-    ram_bot_mb = psutil.Process(os.getpid()).memory_info().rss // (1024**2)
     embed = discord.Embed(title="Monitoramento do servidor", color=discord.Color.blue())
-    topicos = ["CPU", "RAM", "RAM do bot", "Disco"]
+    topicos = ["CPU", "RAM", "Disco"]
     valores = [
         f"{cpu}%",
         f"{ram.percent}% ({(ram.total - ram.available) // (1024 ** 3)}GB / {ram.total // (1024 ** 3)}GB)",
-        f"{ram_bot_mb}MB",
         f"{disk.percent}% ({disk.used // (1024 ** 3)}GB / {disk.total // (1024 ** 3)}GB)",
     ]
     embed.add_field(name="Recurso", value="\n".join(topicos), inline=True)
