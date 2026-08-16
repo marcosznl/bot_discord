@@ -257,26 +257,20 @@ def _mc_servers_atual() -> dict:
 # Categorias mostradas pelo /ajuda. Atualizar aqui sempre que um comando for
 # criado, renomeado ou removido (as descricoes vem direto de cada comando).
 COMANDOS_CATEGORIAS = {
-    "Geral": ["ping", "status", "velocidade_server", "ajuda"],
+    "Geral": ["ping", "status", "ajuda"],
     "Moderacao": ["limpar", "boasvindas"],
     "Niveis": ["xp"],
     "Diversao": ["gif", "socao", "abraco", "charme"],
     "Musica": ["musica", "playlist"],
     "Minecraft": ["mc"],
     "LLM": ["llm"],
-    "Administracao (dono)": ["desligar", "reiniciar"],
+    "Administracao (dono)": ["desligar", "reiniciar", "velocidade_server"],
 }
 
 XP_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xp.db")
 XP_COOLDOWN_SEGUNDOS = 20
 XP_MIN_POR_MENSAGEM = 15
 XP_MAX_POR_MENSAGEM = 25
-
-# Cargos concedidos automaticamente ao atingir cada nivel. Preencha com o ID
-# do cargo: ative o Modo Desenvolvedor no Discord (Configuracoes > Avancado),
-# clique com botao direito no cargo desejado e escolha "Copiar ID".
-# Exemplo: {5: 123456789012345678, 10: 123456789012345679}
-CARGOS_POR_NIVEL: dict[int, int] = {}
 
 _xp_cooldowns: dict[tuple[int, int], float] = {}
 
@@ -402,6 +396,10 @@ def _xp_conectar_bd() -> sqlite3.Connection:
         conexao.execute("INSERT INTO xp_periodo (guild_id, semana) SELECT guild_id, semana FROM xp_periodo_antigo")
         conexao.execute("DROP TABLE xp_periodo_antigo")
         conexao.commit()
+    conexao.execute(
+        "CREATE TABLE IF NOT EXISTS xp_cargos (guild_id INTEGER NOT NULL, nivel INTEGER NOT NULL, "
+        "role_id INTEGER NOT NULL, PRIMARY KEY (guild_id, nivel))"
+    )
     return conexao
 
 
@@ -574,7 +572,7 @@ def _llm_ram_mb() -> int | None:
 
 # Margem de seguranca somada a qualquer estimativa de RAM necessaria, para
 # sobrar espaco para o sistema operacional e o proprio bot.
-RAM_MARGEM_SEGURANCA_GB = 1.0
+RAM_MARGEM_SEGURANCA_GB = 0.5
 
 
 def _ram_disponivel_gb() -> float:
@@ -791,7 +789,7 @@ async def on_message(message: discord.Message):
             if nivel_depois > nivel_antes:
                 await message.channel.send(f"{message.author.mention} subiu para o nivel **{nivel_depois}**!")
 
-                cargo_id = CARGOS_POR_NIVEL.get(nivel_depois)
+                cargo_id = await asyncio.to_thread(_xp_cargo_do_nivel, message.guild.id, nivel_depois)
                 if cargo_id:
                     cargo = message.guild.get_role(cargo_id)
                     if cargo is None:
@@ -953,6 +951,10 @@ def _teste_velocidade() -> dict:
 
 @tree.command(name="velocidade_server", description="Testa a velocidade da internet da maquina")
 async def velocidade_server(interaction: discord.Interaction):
+    if interaction.user.id != owner_id:
+        await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
+        return
+
     await interaction.response.defer()
 
     try:
@@ -1271,6 +1273,38 @@ def _xp_resetar_servidor(guild_id: int) -> int:
         return cursor.rowcount
 
 
+def _xp_cargo_definir(guild_id: int, nivel: int, role_id: int) -> None:
+    with _xp_conectar_bd() as conexao:
+        conexao.execute(
+            "INSERT INTO xp_cargos (guild_id, nivel, role_id) VALUES (?, ?, ?) "
+            "ON CONFLICT (guild_id, nivel) DO UPDATE SET role_id = excluded.role_id",
+            (guild_id, nivel, role_id),
+        )
+        conexao.commit()
+
+
+def _xp_cargo_remover(guild_id: int, nivel: int) -> bool:
+    with _xp_conectar_bd() as conexao:
+        cursor = conexao.execute("DELETE FROM xp_cargos WHERE guild_id = ? AND nivel = ?", (guild_id, nivel))
+        conexao.commit()
+        return cursor.rowcount > 0
+
+
+def _xp_cargos_listar(guild_id: int) -> list[tuple[int, int]]:
+    with _xp_conectar_bd() as conexao:
+        return conexao.execute(
+            "SELECT nivel, role_id FROM xp_cargos WHERE guild_id = ? ORDER BY nivel", (guild_id,)
+        ).fetchall()
+
+
+def _xp_cargo_do_nivel(guild_id: int, nivel: int) -> int | None:
+    with _xp_conectar_bd() as conexao:
+        linha = conexao.execute(
+            "SELECT role_id FROM xp_cargos WHERE guild_id = ? AND nivel = ?", (guild_id, nivel)
+        ).fetchone()
+    return linha[0] if linha else None
+
+
 class ConfirmarResetXP(discord.ui.View):
     def __init__(self, guild_id: int, autor_id: int):
         super().__init__(timeout=30)
@@ -1356,6 +1390,91 @@ class SelecionarUsuarioXP(discord.ui.View):
         await interaction.response.send_modal(ModalQuantidadeXP(self.guild_id, membro))
 
 
+class SelecionarCargoNivel(discord.ui.View):
+    def __init__(self, guild_id: int, nivel: int):
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+        self.nivel = nivel
+        self.select_cargo = discord.ui.RoleSelect(placeholder=f"Escolha o cargo para o nivel {nivel}")
+        self.select_cargo.callback = self._escolhido
+        self.add_item(self.select_cargo)
+
+    async def _escolhido(self, interaction: discord.Interaction):
+        cargo = self.select_cargo.values[0]
+        await asyncio.to_thread(_xp_cargo_definir, self.guild_id, self.nivel, cargo.id)
+        await interaction.response.send_message(
+            f"Nivel {self.nivel} agora da o cargo {cargo.mention}.", ephemeral=True
+        )
+
+
+class ModalNivelCargo(discord.ui.Modal, title="Cargo por nivel"):
+    nivel = discord.ui.TextInput(label="Nivel", placeholder="ex: 5", max_length=5)
+
+    def __init__(self, guild_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        texto = str(self.nivel).strip()
+        if not texto.isdigit() or int(texto) <= 0:
+            await interaction.response.send_message(
+                "Informe um nivel valido (numero inteiro maior que 0).", ephemeral=True
+            )
+            return
+        nivel = int(texto)
+        await interaction.response.send_message(
+            f"Escolha o cargo para o nivel {nivel}:",
+            view=SelecionarCargoNivel(self.guild_id, nivel),
+            ephemeral=True,
+        )
+
+
+class ModalRemoverCargoNivel(discord.ui.Modal, title="Remover cargo por nivel"):
+    nivel = discord.ui.TextInput(label="Nivel a remover", placeholder="ex: 5", max_length=5)
+
+    def __init__(self, guild_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        texto = str(self.nivel).strip()
+        if not texto.isdigit():
+            await interaction.response.send_message("Informe um nivel valido.", ephemeral=True)
+            return
+        removido = await asyncio.to_thread(_xp_cargo_remover, self.guild_id, int(texto))
+        if removido:
+            await interaction.response.send_message(f"Cargo do nivel {texto} removido.", ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                f"Nao havia cargo configurado para o nivel {texto}.", ephemeral=True
+            )
+
+
+class BotoesCargosXP(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+
+    @discord.ui.button(label="Adicionar/Editar", style=discord.ButtonStyle.success)
+    async def adicionar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await interaction.response.send_modal(ModalNivelCargo(self.guild_id))
+
+    @discord.ui.button(label="Ver configurados", style=discord.ButtonStyle.secondary)
+    async def ver(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        cargos = await asyncio.to_thread(_xp_cargos_listar, self.guild_id)
+        if not cargos:
+            await interaction.response.send_message(
+                "Nenhum cargo configurado por nivel neste servidor.", ephemeral=True
+            )
+            return
+        linhas = [f"Nivel {nivel}: <@&{role_id}>" for nivel, role_id in cargos]
+        await interaction.response.send_message("\n".join(linhas), ephemeral=True)
+
+    @discord.ui.button(label="Remover", style=discord.ButtonStyle.danger)
+    async def remover(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await interaction.response.send_modal(ModalRemoverCargoNivel(self.guild_id))
+
+
 class BotoesXPConfig(discord.ui.View):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
@@ -1386,6 +1505,12 @@ class BotoesXPConfig(discord.ui.View):
     async def dar_remover(self, interaction: discord.Interaction, botao: discord.ui.Button):
         await interaction.response.send_message(
             "Escolha o membro:", view=SelecionarUsuarioXP(self.guild_id), ephemeral=True
+        )
+
+    @discord.ui.button(label="Cargos por nivel", style=discord.ButtonStyle.primary)
+    async def cargos(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await interaction.response.send_message(
+            "O que voce quer fazer com os cargos por nivel?", view=BotoesCargosXP(self.guild_id), ephemeral=True
         )
 
 
@@ -1424,7 +1549,10 @@ async def _xp_acao_ajuda(interaction: discord.Interaction) -> None:
     )
     embed.add_field(
         name="Cargos por nivel",
-        value="Alguns niveis podem dar um cargo automatico, configurado pelo dono do bot.",
+        value=(
+            "Alguns niveis podem dar um cargo automatico. Quem tem Gerenciar Servidor "
+            "configura isso em `/xp` > Configuracoes > Cargos por nivel."
+        ),
         inline=False,
     )
     embed.add_field(
