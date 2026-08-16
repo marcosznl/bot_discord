@@ -9,8 +9,6 @@ from discord.ext import commands
 
 from bot.cogs import llm as llm_cog
 from bot.cogs.minecraft import (
-    _mc_acao_desligar,
-    _mc_acao_ligar,
     _mc_jogadores_online,
     _mc_ram_mb,
     _mc_servers_atual,
@@ -68,28 +66,7 @@ async def _status_acao_maquina(interaction: discord.Interaction) -> None:
     ]
     embed.add_field(name="Recurso", value="\n".join(topicos), inline=True)
     embed.add_field(name="Valor", value="\n".join(valores), inline=True)
-    await interaction.followup.send(embed=embed, view=BotoesStatusMaquina())
-
-
-class BotoesStatusMaquina(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=600)
-
-    @discord.ui.button(label="Desligar bot", style=discord.ButtonStyle.danger)
-    async def desligar_bot(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if interaction.user.id != interaction.client.owner_id:
-            await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
-            return
-        await interaction.response.send_message("Desligando o bot...")
-        await interaction.client.close()
-
-    @discord.ui.button(label="Reiniciar bot", style=discord.ButtonStyle.secondary)
-    async def reiniciar_bot(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if interaction.user.id != interaction.client.owner_id:
-            await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
-            return
-        await interaction.response.send_message("Reiniciando o bot...")
-        await interaction.client.close()
+    await interaction.followup.send(embed=embed)
 
 
 async def _status_acao_minecraft(interaction: discord.Interaction) -> None:
@@ -121,29 +98,7 @@ async def _status_acao_minecraft(interaction: discord.Interaction) -> None:
     if not servidores:
         embed_servidores.description = "Nenhum servidor encontrado em " + MC_SERVERS_DIR
 
-    await interaction.followup.send(embed=embed_servidores, view=BotoesStatusMinecraft(servidores))
-
-
-class BotoesStatusMinecraft(discord.ui.View):
-    def __init__(self, servidores: dict):
-        super().__init__(timeout=600)
-        for config in servidores.values():
-            self._adicionar_botoes(config)
-
-    def _adicionar_botoes(self, config: dict) -> None:
-        async def ligar(interaction: discord.Interaction, config=config):
-            await _mc_acao_ligar(interaction, config)
-
-        async def desligar(interaction: discord.Interaction, config=config):
-            await _mc_acao_desligar(interaction, config)
-
-        botao_ligar = discord.ui.Button(label=f"Ligar {config['nome']}", style=discord.ButtonStyle.success)
-        botao_ligar.callback = ligar
-        botao_desligar = discord.ui.Button(label=f"Desligar {config['nome']}", style=discord.ButtonStyle.danger)
-        botao_desligar.callback = desligar
-
-        self.add_item(botao_ligar)
-        self.add_item(botao_desligar)
+    await interaction.followup.send(embed=embed_servidores)
 
 
 async def _status_acao_llm(interaction: discord.Interaction) -> None:
@@ -169,30 +124,7 @@ async def _status_acao_llm(interaction: discord.Interaction) -> None:
         valores_llm = ["Desligada"]
     embed_llm.add_field(name="Info", value="\n".join(topicos_llm), inline=True)
     embed_llm.add_field(name="Valor", value="\n".join(valores_llm), inline=True)
-    await interaction.followup.send(embed=embed_llm, view=BotoesStatusLLM())
-
-
-class BotoesStatusLLM(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=600)
-
-    @discord.ui.button(label="Ligar", style=discord.ButtonStyle.success)
-    async def ligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await llm_cog._llm_acao_ligar(interaction)
-
-    @discord.ui.button(label="Desligar", style=discord.ButtonStyle.danger)
-    async def desligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await llm_cog._llm_acao_desligar(interaction)
-
-    @discord.ui.button(label="Trocar modelo", style=discord.ButtonStyle.primary)
-    async def trocar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        modelos = await asyncio.to_thread(llm_cog._llm_modelos_disponiveis)
-        if not modelos:
-            await interaction.response.send_message("Nenhum modelo encontrado.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "Escolha o modelo para carregar:", view=llm_cog.SelecionarModeloLLM(modelos), ephemeral=True
-        )
+    await interaction.followup.send(embed=embed_llm)
 
 
 class BotoesStatus(discord.ui.View):

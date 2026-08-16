@@ -288,7 +288,7 @@ class SelecionarRemoverFila(discord.ui.View):
         indice = int(interaction.data["values"][0])
         fila = _filas_musica.get(self.guild_id, [])
         if indice < len(fila):
-            titulo, _ = fila.pop(indice)
+            titulo, _, _ = fila.pop(indice)
             await interaction.response.edit_message(content=f"Removido da fila: {titulo}", view=None)
         else:
             await interaction.response.edit_message(content="Essa musica ja nao esta mais na fila.", view=None)
