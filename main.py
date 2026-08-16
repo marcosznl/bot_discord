@@ -14,23 +14,28 @@ import psutil
 import yt_dlp
 from bs4 import BeautifulSoup
 from discord import app_commands
-from discord.ext import tasks
-from dotenv import load_dotenv
+from discord.ext import commands, tasks
 from mcrcon import MCRcon
 
-load_dotenv()
-
-TOKEN = os.getenv("DISCORD_TOKEN")
-GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
-MC_BOOT_TIMEOUT = 300
-MC_BOOT_CHECK_INTERVAL = 10
-MC_SHUTDOWN_TIMEOUT = 60
-# Tempo sem nenhum jogador conectado ate um servidor de Minecraft ser desligado
-# automaticamente (evita deixar a maquina rodando um mundo vazio a toa).
-MC_AUTO_DESLIGAR_SEGUNDOS = 180
-MC_CHAT_CHANNEL_ID = int(os.getenv("MC_CHAT_CHANNEL_ID", "0") or 0)
-# IP/host dinamico para conexao (edite no .env quando o IP mudar).
-MC_HOST = os.getenv("MC_HOST", "")
+from bot.config import (
+    GIPHY_API_KEY,
+    LLM_AUTO_DESLIGAR_SEGUNDOS,
+    LLM_HISTORICO_MAX_MENSAGENS,
+    LLM_MODELO,
+    LLM_PROMPT_SISTEMA,
+    LMS_CLI,
+    LM_STUDIO_URL,
+    MC_AUTO_DESLIGAR_SEGUNDOS,
+    MC_BOOT_CHECK_INTERVAL,
+    MC_BOOT_TIMEOUT,
+    MC_CHAT_CHANNEL_ID,
+    MC_HOST,
+    MC_RCON_SENHA,
+    MC_SERVERS_DIR,
+    MC_SHUTDOWN_TIMEOUT,
+    STATUS_SEM_SERVIDOR,
+    TOKEN,
+)
 
 # Configuracao de boas-vindas por servidor (canal + mensagem), definida pelo
 # comando /boasvindas e guardada em BOAS_VINDAS_CONFIG_PATH - nao precisa
@@ -68,20 +73,6 @@ def _boas_vindas_desativar(guild_id: int) -> None:
     with open(BOAS_VINDAS_CONFIG_PATH, "w", encoding="utf-8") as arquivo:
         json.dump(dados, arquivo, indent=2)
 
-# Endereco da API local do LM Studio (compativel com o formato da OpenAI).
-LM_STUDIO_URL = os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1/chat/completions")
-LLM_PROMPT_SISTEMA = os.getenv(
-    "LLM_PROMPT_SISTEMA",
-    "Voce e um assistente respondendo em um servidor do Discord. Seja conciso. "
-    "Responda sempre em portugues do Brasil (pt-br).",
-)
-LMS_CLI = os.path.expanduser("~/.lmstudio/bin/lms")
-LLM_MODELO = os.getenv("LLM_MODELO", "google/gemma-4-e4b")
-# Tempo sem nenhuma interacao ate a LLM local ser desligada automaticamente.
-LLM_AUTO_DESLIGAR_SEGUNDOS = 180
-# Quantas mensagens (usuario + assistente) ficam guardadas por conversa.
-LLM_HISTORICO_MAX_MENSAGENS = 50
-
 # Descricao curta do ponto forte de cada modelo, usada pelo /ajuda_llm.
 # Modelos baixados sem entrada aqui aparecem com uma descricao generica.
 LLM_DESCRICOES = {
@@ -114,15 +105,6 @@ LLM_FERRAMENTA_BUSCA = {
 _llm_historico: dict[tuple[int | None, int, int], list[dict]] = {}
 _llm_ultima_interacao: float | None = None
 
-# Texto personalizavel do status do bot: usado no Custom Status (balao ao lado
-# do avatar) e tambem no "Jogando X" quando nenhum servidor esta ligado.
-STATUS_SEM_SERVIDOR = os.getenv("STATUS_SEM_SERVIDOR", "Tempo acordado")
-
-# Pasta que contem as subpastas de cada servidor de Minecraft (uma por
-# servidor, com o nome usado em "dir" abaixo). Editavel via .env para migrar
-# o bot para outra maquina/usuario sem mexer no codigo.
-MC_SERVERS_DIR = os.path.expanduser(os.getenv("MC_SERVERS_DIR", "~/server_minecraft"))
-
 # Servidores de Minecraft conhecidos/configurados manualmente. Qualquer outra
 # pasta dentro de MC_SERVERS_DIR que tenha um server.properties e descoberta
 # automaticamente em tempo real por _mc_servers_atual() - nao precisa mexer
@@ -147,8 +129,6 @@ MC_SERVERS = {
 # Guarda o "ram_gb" editado pelo botao Editar do /mc e a config dos servidores
 # descobertos automaticamente, para sobreviver a reinicios do bot.
 MC_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mc_config.json")
-
-MC_RCON_SENHA = os.getenv("MC_RCON_SENHA", "")
 
 MC_JARS_PREFERIDOS = ("server.jar", "run.jar", "paper.jar", "purpur.jar", "spigot.jar")
 
@@ -313,10 +293,8 @@ BOT_INICIO = time.time()
 intents = discord.Intents.default()
 intents.members = True  # necessario para o evento de boas-vindas (on_member_join)
 
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
-
-owner_id = None
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+tree = bot.tree
 
 
 def _formatar_duracao(segundos: int) -> str:
@@ -333,7 +311,7 @@ def _bot_tempo_ligado() -> str:
 
 async def _change_presence_multipla(atividades: list) -> None:
     payload = {
-        "op": client.ws.PRESENCE,
+        "op": bot.ws.PRESENCE,
         "d": {
             "activities": [a.to_dict() for a in atividades],
             "afk": False,
@@ -341,7 +319,7 @@ async def _change_presence_multipla(atividades: list) -> None:
             "status": "online",
         },
     }
-    await client.ws.send(json.dumps(payload))
+    await bot.ws.send(json.dumps(payload))
 
 
 @tasks.loop(seconds=60)
@@ -356,7 +334,7 @@ async def monitorar_chat_minecraft():
     if not MC_CHAT_CHANNEL_ID:
         return
 
-    canal = client.get_channel(MC_CHAT_CHANNEL_ID)
+    canal = bot.get_channel(MC_CHAT_CHANNEL_ID)
     if canal is None:
         return
 
@@ -715,8 +693,8 @@ async def _responder_llm(message: discord.Message) -> None:
     global _llm_ultima_interacao
 
     pergunta = message.content
-    if client.user in message.mentions:
-        pergunta = re.sub(rf"<@!?{client.user.id}>", "", pergunta).strip()
+    if bot.user in message.mentions:
+        pergunta = re.sub(rf"<@!?{bot.user.id}>", "", pergunta).strip()
 
     if not pergunta:
         return
@@ -749,13 +727,13 @@ async def _responder_llm(message: discord.Message) -> None:
         await message.channel.send(resposta[inicio : inicio + 1900])
 
 
-@client.event
+@bot.event
 async def on_member_join(member: discord.Member):
     config = await asyncio.to_thread(_boas_vindas_config, member.guild.id)
     if not config or not config.get("canal_id"):
         return
 
-    canal = client.get_channel(config["canal_id"])
+    canal = bot.get_channel(config["canal_id"])
     if canal is None:
         return
 
@@ -764,7 +742,7 @@ async def on_member_join(member: discord.Member):
     await canal.send(texto)
 
 
-@client.event
+@bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
@@ -800,14 +778,14 @@ async def on_message(message: discord.Message):
                         except discord.Forbidden:
                             print(f"Sem permissao para dar o cargo '{cargo.name}' (nivel {nivel_depois}).")
 
-    if message.guild is None or client.user in message.mentions:
+    if message.guild is None or bot.user in message.mentions:
         await _responder_llm(message)
 
 
 @tasks.loop(seconds=30)
 async def verificar_ocioso_voz():
     agora = time.time()
-    for guild in client.guilds:
+    for guild in bot.guilds:
         voice_client = guild.voice_client
         if voice_client is None:
             _ocioso_desde.pop(guild.id, None)
@@ -827,7 +805,7 @@ async def verificar_ocioso_voz():
 async def _mc_avisar_crash(config: dict) -> None:
     print(f"{config['nome']} parou de responder inesperadamente (possivel crash).")
     if MC_CHAT_CHANNEL_ID:
-        canal = client.get_channel(MC_CHAT_CHANNEL_ID)
+        canal = bot.get_channel(MC_CHAT_CHANNEL_ID)
         if canal is not None:
             await canal.send(
                 f"⚠️ {config['nome']} parou de responder inesperadamente - pode ter crashado. "
@@ -871,7 +849,7 @@ async def verificar_mc_ocioso():
         minutos = MC_AUTO_DESLIGAR_SEGUNDOS // 60
         print(f"{config['nome']} desligado automaticamente por ficar {minutos} minutos sem jogadores.")
         if MC_CHAT_CHANNEL_ID:
-            canal = client.get_channel(MC_CHAT_CHANNEL_ID)
+            canal = bot.get_channel(MC_CHAT_CHANNEL_ID)
             if canal is not None:
                 await canal.send(f"{config['nome']} foi desligado automaticamente por ficar {minutos} minutos sem jogadores.")
 
@@ -900,15 +878,15 @@ async def verificar_llm_ociosa():
 @tasks.loop(hours=1)
 async def verificar_xp_semana():
     semana_atual = _xp_semana_atual()
-    for guild in client.guilds:
+    for guild in bot.guilds:
         semana_guardada = await asyncio.to_thread(_xp_semana_guardada, guild.id)
         if semana_guardada != semana_atual:
             await asyncio.to_thread(_xp_resetar_semana, guild.id)
 
 
-@client.event
+@bot.event
 async def on_ready():
-    global owner_id, _llm_ultima_interacao
+    global _llm_ultima_interacao
     if not atualizar_presence.is_running():
         atualizar_presence.start()
     if not monitorar_chat_minecraft.is_running():
@@ -928,10 +906,10 @@ async def on_ready():
         # de fato desde quando ela esta sem uso.
         _llm_ultima_interacao = time.time()
 
-    app_info = await client.application_info()
-    owner_id = app_info.owner.id
+    app_info = await bot.application_info()
+    bot.owner_id = app_info.owner.id
     await tree.sync()
-    print(f"Bot conectado como {client.user}")
+    print(f"Bot conectado como {bot.user}")
 
 
 @tree.command(name="ping", description="Testa se o bot esta online")
@@ -951,7 +929,7 @@ def _teste_velocidade() -> dict:
 
 @tree.command(name="velocidade_server", description="Testa a velocidade da internet da maquina")
 async def velocidade_server(interaction: discord.Interaction):
-    if interaction.user.id != owner_id:
+    if interaction.user.id != bot.owner_id:
         await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
         return
 
@@ -1049,19 +1027,19 @@ class BotoesStatusMaquina(discord.ui.View):
 
     @discord.ui.button(label="Desligar bot", style=discord.ButtonStyle.danger)
     async def desligar_bot(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if interaction.user.id != owner_id:
+        if interaction.user.id != bot.owner_id:
             await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
             return
         await interaction.response.send_message("Desligando o bot...")
-        await client.close()
+        await bot.close()
 
     @discord.ui.button(label="Reiniciar bot", style=discord.ButtonStyle.secondary)
     async def reiniciar_bot(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if interaction.user.id != owner_id:
+        if interaction.user.id != bot.owner_id:
             await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
             return
         await interaction.response.send_message("Reiniciando o bot...")
-        await client.close()
+        await bot.close()
 
 
 async def _status_acao_minecraft(interaction: discord.Interaction) -> None:
@@ -1204,7 +1182,7 @@ async def _xp_acao_rank(interaction: discord.Interaction) -> None:
     barra = _barra_progresso(xp_no_nivel, xp_necessario)
     posicao = await asyncio.to_thread(_xp_posicao, interaction.guild.id, alvo.id)
 
-    usuario_completo = await client.fetch_user(alvo.id)
+    usuario_completo = await bot.fetch_user(alvo.id)
     cor = usuario_completo.accent_color or discord.Color.blue()
 
     embed = discord.Embed(title=f"Rank de {alvo.display_name}", color=cor)
@@ -3086,22 +3064,22 @@ async def llm(interaction: discord.Interaction):
 
 @tree.command(name="desligar", description="Desliga o bot (apenas o dono)")
 async def desligar(interaction: discord.Interaction):
-    if interaction.user.id != owner_id:
+    if interaction.user.id != bot.owner_id:
         await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
         return
 
     await interaction.response.send_message("Desligando o bot...")
-    await client.close()
+    await bot.close()
 
 
 @tree.command(name="reiniciar", description="Reinicia o bot (apenas o dono)")
 async def reiniciar(interaction: discord.Interaction):
-    if interaction.user.id != owner_id:
+    if interaction.user.id != bot.owner_id:
         await interaction.response.send_message("Voce nao tem permissao para isso.", ephemeral=True)
         return
 
     await interaction.response.send_message("Reiniciando o bot...")
-    await client.close()
+    await bot.close()
 
 
 class ModalBoasVindasMensagem(discord.ui.Modal):
@@ -3150,7 +3128,7 @@ class BotoesBoasVindas(discord.ui.View):
             await interaction.response.send_message("Boas-vindas desativadas (nenhum canal configurado).", ephemeral=True)
             return
 
-        canal = client.get_channel(config["canal_id"])
+        canal = bot.get_channel(config["canal_id"])
         canal_texto = canal.mention if canal is not None else f"<#{config['canal_id']}>"
         mensagem = config.get("mensagem", BOAS_VINDAS_MENSAGEM_PADRAO)
         await interaction.response.send_message(f"Canal: {canal_texto}\nMensagem: {mensagem}", ephemeral=True)
@@ -3178,4 +3156,4 @@ async def boasvindas(interaction: discord.Interaction):
 
 
 if __name__ == "__main__":
-    client.run(TOKEN)
+    bot.run(TOKEN)
