@@ -7,7 +7,23 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.config import DATA_DIR
-from bot.cogs.musica import _filas_musica, _formatar_duracao_musica, _tocar_proximo, _ytdlp_buscar
+from bot.cogs.musica import (
+    ModalVolumeMusica,
+    _filas_musica,
+    _formatar_duracao_musica,
+    _musica_acao_anterior,
+    _musica_acao_continuar,
+    _musica_acao_embaralhar,
+    _musica_acao_fila,
+    _musica_acao_limpar_fila,
+    _musica_acao_pausar,
+    _musica_acao_pular,
+    _musica_acao_parar,
+    _musica_acao_remover,
+    _musica_acao_repetir,
+    _tocar_proximo,
+    _ytdlp_buscar,
+)
 
 PLAYLIST_DB_PATH = os.path.join(DATA_DIR, "playlists.db")
 
@@ -323,6 +339,50 @@ class BotoesPlaylist(discord.ui.View):
         await interaction.response.send_message(
             "Escolha a playlist para editar:", view=SelecionarPlaylistEditar(nomes), ephemeral=True
         )
+
+    @discord.ui.button(label="Anterior", style=discord.ButtonStyle.secondary)
+    async def anterior(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_anterior(interaction)
+
+    @discord.ui.button(label="Pular", style=discord.ButtonStyle.secondary)
+    async def pular(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_pular(interaction)
+
+    @discord.ui.button(label="Parar", style=discord.ButtonStyle.danger)
+    async def parar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_parar(interaction)
+
+    @discord.ui.button(label="Volume", style=discord.ButtonStyle.primary)
+    async def volume(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await interaction.response.send_modal(ModalVolumeMusica())
+
+    @discord.ui.button(label="Fila", style=discord.ButtonStyle.secondary)
+    async def fila(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_fila(interaction)
+
+    @discord.ui.button(label="Pausar", style=discord.ButtonStyle.secondary)
+    async def pausar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_pausar(interaction)
+
+    @discord.ui.button(label="Continuar", style=discord.ButtonStyle.success)
+    async def continuar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_continuar(interaction)
+
+    @discord.ui.button(label="Embaralhar", style=discord.ButtonStyle.primary)
+    async def embaralhar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_embaralhar(interaction)
+
+    @discord.ui.button(label="Remover da fila", style=discord.ButtonStyle.danger)
+    async def remover(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_remover(interaction)
+
+    @discord.ui.button(label="Repetir", style=discord.ButtonStyle.primary)
+    async def repetir(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_repetir(interaction)
+
+    @discord.ui.button(label="Limpar fila", style=discord.ButtonStyle.danger)
+    async def limpar_fila(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        await _musica_acao_limpar_fila(interaction)
 
 
 class Playlist(commands.Cog):
