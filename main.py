@@ -4,6 +4,7 @@ import os
 import platform
 import random
 import re
+import sqlite3
 import subprocess
 import time
 
@@ -25,6 +26,26 @@ MC_SHUTDOWN_TIMEOUT = 60
 MC_CHAT_CHANNEL_ID = int(os.getenv("MC_CHAT_CHANNEL_ID", "0") or 0)
 # IP/host dinamico para conexao (edite no .env quando o IP mudar).
 MC_HOST = os.getenv("MC_HOST", "")
+
+# Endereco da API local do LM Studio (compativel com o formato da OpenAI).
+LM_STUDIO_URL = os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1/chat/completions")
+LLM_PROMPT_SISTEMA = "Voce e um assistente respondendo em um servidor do Discord. Seja conciso."
+LMS_CLI = os.path.expanduser("~/.lmstudio/bin/lms")
+LLM_MODELO = os.getenv("LLM_MODELO", "google/gemma-4-e4b")
+# Quantas mensagens (usuario + assistente) ficam guardadas por conversa.
+LLM_HISTORICO_MAX_MENSAGENS = 20
+
+# Descricao curta do ponto forte de cada modelo, usada pelo /ajuda_llm.
+# Modelos baixados sem entrada aqui aparecem com uma descricao generica.
+LLM_DESCRICOES = {
+    "qwen/qwen3.5-9b": "Generalista forte, bom em varios idiomas e uso de ferramentas, contexto bem grande.",
+    "google/gemma-4-12b": "Modelo maior do Google, bom para tarefas gerais e consegue analisar imagens.",
+    "deepseek/deepseek-r1-0528-qwen3-8b": "Focado em raciocinio - melhor para logica, matematica e problemas passo a passo.",
+    "microsoft/phi-4-mini-reasoning": "Pequeno e leve, tambem focado em raciocinio - ideal para economizar RAM.",
+    "google/gemma-4-e4b": "Generalista leve do Google, tambem analisa imagens - bom modelo padrao do dia a dia.",
+}
+
+_llm_historico: dict[tuple[int | None, int, int], list[dict]] = {}
 
 # Texto personalizavel do status do bot: usado no Custom Status (balao ao lado
 # do avatar) e tambem no "Jogando X" quando nenhum servidor esta ligado.
@@ -50,12 +71,28 @@ SERVIDOR_CHOICES = [app_commands.Choice(name=cfg["nome"], value=chave) for chave
 # Categorias mostradas pelo /ajuda. Atualizar aqui sempre que um comando for
 # criado, renomeado ou removido (as descricoes vem direto de cada comando).
 COMANDOS_CATEGORIAS = {
-    "Geral": ["ping", "status", "ajuda"],
-    "Diversao": ["gif", "socao", "abraco"],
+    "Geral": ["ping", "status", "velocidade_server", "ajuda"],
+    "Moderacao": ["limpar"],
+    "Niveis": ["rank", "leaderboard", "ajuda_xp"],
+    "Diversao": ["gif", "socao", "abraco", "charme"],
     "Musica": ["tocar", "pular", "parar", "volume"],
     "Minecraft": ["mc_ligar", "mc_desligar", "mc_reiniciar"],
+    "LLM": ["llm_ligar", "llm_desligar", "llm_trocar", "ajuda_llm", "llm_esquecer"],
     "Administracao (dono)": ["desligar", "reiniciar"],
 }
+
+XP_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xp.db")
+XP_COOLDOWN_SEGUNDOS = 20
+XP_MIN_POR_MENSAGEM = 15
+XP_MAX_POR_MENSAGEM = 25
+
+# Cargos concedidos automaticamente ao atingir cada nivel. Preencha com o ID
+# do cargo: ative o Modo Desenvolvedor no Discord (Configuracoes > Avancado),
+# clique com botao direito no cargo desejado e escolha "Copiar ID".
+# Exemplo: {5: 123456789012345678, 10: 123456789012345679}
+CARGOS_POR_NIVEL: dict[int, int] = {}
+
+_xp_cooldowns: dict[tuple[int, int], float] = {}
 
 YTDLP_OPTS = {
     "format": "bestaudio/best",
@@ -146,6 +183,193 @@ async def monitorar_chat_minecraft():
                 await canal.send(f"{prefixo}{evento}")
 
 
+def _xp_conectar_bd() -> sqlite3.Connection:
+    conexao = sqlite3.connect(XP_DB_PATH)
+    conexao.execute(
+        "CREATE TABLE IF NOT EXISTS xp_usuarios ("
+        "guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, xp INTEGER NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (guild_id, user_id))"
+    )
+    return conexao
+
+
+def _xp_total_ate_nivel(nivel: int) -> int:
+    total = 0
+    for n in range(nivel):
+        total += 5 * (n**2) + 50 * n + 100
+    return total
+
+
+def _xp_calcular_nivel(xp_total: int) -> int:
+    nivel = 0
+    while xp_total >= _xp_total_ate_nivel(nivel + 1):
+        nivel += 1
+    return nivel
+
+
+def _xp_progresso(xp_total: int) -> tuple[int, int, int]:
+    nivel = _xp_calcular_nivel(xp_total)
+    base_atual = _xp_total_ate_nivel(nivel)
+    base_proximo = _xp_total_ate_nivel(nivel + 1)
+    return nivel, xp_total - base_atual, base_proximo - base_atual
+
+
+def _xp_obter(guild_id: int, user_id: int) -> int:
+    with _xp_conectar_bd() as conexao:
+        linha = conexao.execute(
+            "SELECT xp FROM xp_usuarios WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
+        ).fetchone()
+    return linha[0] if linha else 0
+
+
+def _xp_adicionar(guild_id: int, user_id: int, quantidade: int) -> tuple[int, int]:
+    with _xp_conectar_bd() as conexao:
+        linha = conexao.execute(
+            "SELECT xp FROM xp_usuarios WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
+        ).fetchone()
+        xp_antes = linha[0] if linha else 0
+        xp_depois = xp_antes + quantidade
+        conexao.execute(
+            "INSERT INTO xp_usuarios (guild_id, user_id, xp) VALUES (?, ?, ?) "
+            "ON CONFLICT (guild_id, user_id) DO UPDATE SET xp = excluded.xp",
+            (guild_id, user_id, xp_depois),
+        )
+        conexao.commit()
+    return xp_antes, xp_depois
+
+
+def _xp_leaderboard(guild_id: int, limite: int = 10) -> list[tuple[int, int]]:
+    with _xp_conectar_bd() as conexao:
+        linhas = conexao.execute(
+            "SELECT user_id, xp FROM xp_usuarios WHERE guild_id = ? ORDER BY xp DESC LIMIT ?",
+            (guild_id, limite),
+        ).fetchall()
+    return linhas
+
+
+def _llm_servidor_rodando() -> bool:
+    resultado = subprocess.run([LMS_CLI, "server", "status"], capture_output=True, text=True)
+    saida = (resultado.stdout + resultado.stderr).lower()
+    return "is running" in saida
+
+
+def _llm_processo():
+    for proc in psutil.process_iter(["cmdline", "name"]):
+        try:
+            cmdline = proc.info["cmdline"] or []
+            if any("llmworker.js" in parte for parte in cmdline):
+                return proc
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+
+def _llm_ram_mb() -> int | None:
+    processo = _llm_processo()
+    if processo is None:
+        return None
+    return processo.memory_info().rss // (1024**2)
+
+
+def _llm_modelos_disponiveis() -> list[str]:
+    resultado = subprocess.run([LMS_CLI, "ls", "--llm", "--json"], capture_output=True, text=True)
+    try:
+        modelos = json.loads(resultado.stdout)
+    except json.JSONDecodeError:
+        return []
+    return [m["modelKey"] for m in modelos]
+
+
+async def _llm_autocomplete_modelo(
+    interaction: discord.Interaction, atual: str
+) -> list[app_commands.Choice[str]]:
+    modelos = await asyncio.to_thread(_llm_modelos_disponiveis)
+    return [
+        app_commands.Choice(name=modelo, value=modelo)
+        for modelo in modelos
+        if atual.lower() in modelo.lower()
+    ][:25]
+
+
+def _llm_chave_conversa(message: discord.Message) -> tuple[int | None, int, int]:
+    guild_id = message.guild.id if message.guild else None
+    return (guild_id, message.channel.id, message.author.id)
+
+
+async def _consultar_llm_local(historico: list[dict]) -> str:
+    payload = {
+        "messages": [{"role": "system", "content": LLM_PROMPT_SISTEMA}, *historico],
+        "temperature": 0.7,
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(LM_STUDIO_URL, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            dados = await resp.json()
+    return dados["choices"][0]["message"]["content"]
+
+
+async def _responder_llm(message: discord.Message) -> None:
+    pergunta = message.content
+    if client.user in message.mentions:
+        pergunta = re.sub(rf"<@!?{client.user.id}>", "", pergunta).strip()
+
+    if not pergunta:
+        return
+
+    historico = _llm_historico.setdefault(_llm_chave_conversa(message), [])
+    historico.append({"role": "user", "content": pergunta})
+
+    async with message.channel.typing():
+        try:
+            resposta = await _consultar_llm_local(historico)
+        except Exception as erro:
+            print(f"Erro ao consultar LLM local: {erro}")
+            await message.channel.send("Nao consegui falar com a LLM local agora. Ela esta rodando?")
+            historico.pop()
+            return
+
+    historico.append({"role": "assistant", "content": resposta})
+    del historico[:-LLM_HISTORICO_MAX_MENSAGENS]
+
+    for inicio in range(0, len(resposta), 1900):
+        await message.channel.send(resposta[inicio : inicio + 1900])
+
+
+@client.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    if message.guild is not None:
+        chave = (message.guild.id, message.author.id)
+        agora = time.time()
+        if agora - _xp_cooldowns.get(chave, 0) >= XP_COOLDOWN_SEGUNDOS:
+            _xp_cooldowns[chave] = agora
+
+            ganho = random.randint(XP_MIN_POR_MENSAGEM, XP_MAX_POR_MENSAGEM)
+            xp_antes, xp_depois = await asyncio.to_thread(
+                _xp_adicionar, message.guild.id, message.author.id, ganho
+            )
+
+            nivel_antes = _xp_calcular_nivel(xp_antes)
+            nivel_depois = _xp_calcular_nivel(xp_depois)
+            if nivel_depois > nivel_antes:
+                await message.channel.send(f"{message.author.mention} subiu para o nivel **{nivel_depois}**!")
+
+                cargo_id = CARGOS_POR_NIVEL.get(nivel_depois)
+                if cargo_id:
+                    cargo = message.guild.get_role(cargo_id)
+                    if cargo is None:
+                        print(f"Cargo {cargo_id} do nivel {nivel_depois} nao foi encontrado no servidor.")
+                    else:
+                        try:
+                            await message.author.add_roles(cargo)
+                        except discord.Forbidden:
+                            print(f"Sem permissao para dar o cargo '{cargo.name}' (nivel {nivel_depois}).")
+
+    if message.guild is None or client.user in message.mentions:
+        await _responder_llm(message)
+
+
 @tasks.loop(seconds=30)
 async def verificar_ocioso_voz():
     agora = time.time()
@@ -187,6 +411,51 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
 
 
+def _teste_velocidade() -> dict:
+    resultado = subprocess.run(
+        ["speedtest", "--accept-license", "--accept-gdpr", "--format=json"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return json.loads(resultado.stdout)
+
+
+@tree.command(name="velocidade_server", description="Testa a velocidade da internet da maquina")
+async def velocidade_server(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    try:
+        dados = await asyncio.to_thread(_teste_velocidade)
+    except Exception as erro:
+        print(f"Erro no teste de velocidade: {erro}")
+        await interaction.followup.send("Nao consegui rodar o teste de velocidade agora.")
+        return
+
+    download_mbps = dados["download"]["bandwidth"] * 8 / 1_000_000
+    upload_mbps = dados["upload"]["bandwidth"] * 8 / 1_000_000
+    ping_ms = dados["ping"]["latency"]
+
+    embed = discord.Embed(title="Teste de velocidade", color=discord.Color.blue())
+    embed.add_field(name="Medida", value="Download\nUpload\nPing", inline=True)
+    embed.add_field(
+        name="Valor",
+        value=f"{download_mbps:.1f} Mbps\n{upload_mbps:.1f} Mbps\n{ping_ms:.0f} ms",
+        inline=True,
+    )
+    embed.set_footer(text=f"Servidor: {dados['server']['name']} ({dados['server']['location']})")
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="limpar", description="Apaga mensagens recentes deste canal")
+@app_commands.describe(quantidade="Quantas mensagens apagar (1 a 100)")
+@app_commands.default_permissions(manage_messages=True)
+async def limpar(interaction: discord.Interaction, quantidade: app_commands.Range[int, 1, 100]):
+    await interaction.response.defer(ephemeral=True)
+    await interaction.channel.purge(limit=quantidade)
+    await interaction.delete_original_response()
+
+
 @tree.command(name="ajuda", description="Mostra todos os comandos do bot, por categoria")
 async def ajuda(interaction: discord.Interaction):
     comandos_por_nome = {c.name: c for c in tree.get_commands() if isinstance(c, app_commands.Command)}
@@ -218,19 +487,21 @@ async def status(interaction: discord.Interaction):
         disk_path = "/"
     disk = psutil.disk_usage(disk_path)
 
+    ram_bot_mb = psutil.Process(os.getpid()).memory_info().rss // (1024**2)
     embed = discord.Embed(title="Monitoramento do servidor", color=discord.Color.blue())
-    embed.add_field(name="CPU", value=f"{cpu}%", inline=False)
-    embed.add_field(
-        name="RAM",
-        value=f"{ram.percent}% ({ram.used // (1024 ** 3)}GB / {ram.total // (1024 ** 3)}GB)",
-        inline=False,
-    )
-    embed.add_field(
-        name="Disco",
-        value=f"{disk.percent}% ({disk.used // (1024 ** 3)}GB / {disk.total // (1024 ** 3)}GB)",
-        inline=False,
-    )
+    topicos = ["CPU", "RAM", "RAM do bot", "Disco"]
+    valores = [
+        f"{cpu}%",
+        f"{ram.percent}% ({ram.used // (1024 ** 3)}GB / {ram.total // (1024 ** 3)}GB)",
+        f"{ram_bot_mb}MB",
+        f"{disk.percent}% ({disk.used // (1024 ** 3)}GB / {disk.total // (1024 ** 3)}GB)",
+    ]
+    embed.add_field(name="Recurso", value="\n".join(topicos), inline=True)
+    embed.add_field(name="Valor", value="\n".join(valores), inline=True)
 
+    embed_servidores = discord.Embed(title="Servidores de Minecraft", color=discord.Color.green())
+    topicos_srv = []
+    valores_srv = []
     for config in MC_SERVERS.values():
         tempo = await asyncio.to_thread(_mc_tempo_ligado, config)
         if tempo is None:
@@ -239,9 +510,105 @@ async def status(interaction: discord.Interaction):
             valor = f"Ligado ha {tempo}"
         else:
             valor = f"Ligando... ({tempo})"
-        embed.add_field(name=config["nome"], value=valor, inline=False)
+        topicos_srv.append(config["nome"])
+        valores_srv.append(valor)
+    embed_servidores.add_field(name="Servidor", value="\n".join(topicos_srv), inline=True)
+    embed_servidores.add_field(name="Status", value="\n".join(valores_srv), inline=True)
+
+    embed_llm = discord.Embed(title="LLM Local", color=discord.Color.purple())
+    if await asyncio.to_thread(_llm_servidor_rodando):
+        ram_mb = await asyncio.to_thread(_llm_ram_mb)
+        topicos_llm = ["Status", "Modelo"]
+        valores_llm = ["Ligada", LLM_MODELO]
+        if ram_mb is not None:
+            topicos_llm.append("RAM")
+            valores_llm.append(f"{ram_mb}MB")
+    else:
+        topicos_llm = ["Status"]
+        valores_llm = ["Desligada"]
+    embed_llm.add_field(name="Info", value="\n".join(topicos_llm), inline=True)
+    embed_llm.add_field(name="Valor", value="\n".join(valores_llm), inline=True)
+
+    await interaction.followup.send(embeds=[embed, embed_servidores, embed_llm])
+
+
+def _barra_progresso(atual: int, total: int, tamanho: int = 20) -> str:
+    proporcao = min(atual / total, 1) if total else 0
+    preenchido = round(tamanho * proporcao)
+    return "█" * preenchido + "░" * (tamanho - preenchido)
+
+
+@tree.command(name="rank", description="Mostra seu nivel e XP (ou de outra pessoa)")
+@app_commands.describe(pessoa="De quem ver o rank (padrao: voce)")
+async def rank(interaction: discord.Interaction, pessoa: discord.Member | None = None):
+    alvo = pessoa or interaction.user
+    await interaction.response.defer()
+
+    xp_total = await asyncio.to_thread(_xp_obter, interaction.guild.id, alvo.id)
+    nivel, xp_no_nivel, xp_necessario = _xp_progresso(xp_total)
+    barra = _barra_progresso(xp_no_nivel, xp_necessario)
+
+    usuario_completo = await client.fetch_user(alvo.id)
+    cor = usuario_completo.accent_color or discord.Color.blue()
+
+    embed = discord.Embed(title=f"Rank de {alvo.display_name}", color=cor)
+    embed.set_thumbnail(url=alvo.display_avatar.url)
+    embed.add_field(name="Nivel", value=str(nivel), inline=True)
+    embed.add_field(name="XP total", value=str(xp_total), inline=True)
+    embed.add_field(name="Progresso para o proximo nivel", value=f"{barra}\n{xp_no_nivel} / {xp_necessario} XP", inline=False)
 
     await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="leaderboard", description="Mostra os membros com mais XP no servidor")
+async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    linhas = await asyncio.to_thread(_xp_leaderboard, interaction.guild.id, 10)
+    if not linhas:
+        await interaction.followup.send("Ainda ninguem tem XP neste servidor.")
+        return
+
+    texto = []
+    for posicao, (user_id, xp_total) in enumerate(linhas, start=1):
+        nivel, xp_no_nivel, xp_necessario = _xp_progresso(xp_total)
+        barra = _barra_progresso(xp_no_nivel, xp_necessario, tamanho=10)
+        texto.append(f"**{posicao}.** <@{user_id}> - Nivel {nivel} ({xp_total} XP)\n{barra}")
+
+    embed = discord.Embed(title="Ranking do servidor", description="\n".join(texto), color=discord.Color.gold())
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="ajuda_xp", description="Explica como funciona o sistema de XP e niveis")
+async def ajuda_xp(interaction: discord.Interaction):
+    embed = discord.Embed(title="Como funciona o XP", color=discord.Color.blue())
+    embed.add_field(
+        name="Como ganhar XP",
+        value=(
+            f"Voce ganha entre {XP_MIN_POR_MENSAGEM} e {XP_MAX_POR_MENSAGEM} XP a cada mensagem enviada, "
+            f"com um intervalo minimo de {XP_COOLDOWN_SEGUNDOS} segundos entre mensagens que contam."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Subindo de nivel",
+        value=(
+            "Cada nivel exige mais XP que o anterior. Quando voce sobe de nivel, "
+            "o bot avisa no canal onde voce mandou a mensagem."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Cargos por nivel",
+        value="Alguns niveis podem dar um cargo automatico, configurado pelo dono do bot.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Comandos",
+        value="`/rank` mostra seu nivel e progresso. `/leaderboard` mostra o ranking do servidor.",
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed)
 
 
 async def _buscar_gif(busca: str) -> str | None:
@@ -300,6 +667,23 @@ async def abraco(interaction: discord.Interaction, pessoa: discord.Member):
     embed.set_image(url=gif_url)
     await interaction.followup.send(
         content=f"{interaction.user.mention} deu um abraco em {pessoa.mention}", embed=embed
+    )
+
+
+@tree.command(name="charme", description="Joga um charme (com gif de anime) para alguem")
+@app_commands.describe(pessoa="Para quem jogar o charme")
+async def charme(interaction: discord.Interaction, pessoa: discord.Member):
+    await interaction.response.defer()
+
+    gif_url = await _buscar_gif("anime flirt")
+    if gif_url is None:
+        await interaction.followup.send("Nao encontrei nenhum gif de charme agora.")
+        return
+
+    embed = discord.Embed()
+    embed.set_image(url=gif_url)
+    await interaction.followup.send(
+        content=f"{interaction.user.mention} jogou um charme para {pessoa.mention}", embed=embed
     )
 
 
@@ -447,6 +831,10 @@ def _mc_servidor_rodando(config) -> bool:
     return _mc_processo(config) is not None
 
 
+def _algum_mc_servidor_rodando() -> bool:
+    return any(_mc_servidor_rodando(config) for config in MC_SERVERS.values())
+
+
 def _mc_servidor_pronto(config) -> bool:
     log_path = os.path.join(config["dir"], "logs", "latest.log")
     resultado = subprocess.run(["grep", "-m", "1", "Done (", log_path], capture_output=True, text=True)
@@ -507,7 +895,7 @@ def _mc_formatar_evento_chat(linha: str) -> str | None:
 def _mc_info_conexao(config) -> str:
     porta = _mc_porta(config)
     if MC_HOST and porta:
-        return f"\nConecte em: {MC_HOST}:{porta}"
+        return f"\n**Conecte em:** {MC_HOST}:{porta}"
     return ""
 
 
@@ -517,6 +905,13 @@ def _mc_info_conexao(config) -> str:
 async def mc_ligar(interaction: discord.Interaction, servidor: app_commands.Choice[str]):
     config = MC_SERVERS[servidor.value]
     await interaction.response.defer()
+
+    if await asyncio.to_thread(_llm_servidor_rodando):
+        await interaction.followup.send(
+            "Nao da pra ligar o servidor de Minecraft com a LLM local ligada - "
+            "os dois juntos passariam do limite de RAM da maquina. Use /llm_desligar primeiro."
+        )
+        return
 
     if await asyncio.to_thread(_mc_servidor_rodando, config):
         if await asyncio.to_thread(_mc_servidor_pronto, config):
@@ -618,6 +1013,140 @@ async def mc_reiniciar(interaction: discord.Interaction, servidor: app_commands.
     await interaction.edit_original_response(
         content=f"{config['nome']} esta demorando mais que o esperado para subir. Use /status para verificar."
     )
+
+
+@tree.command(name="llm_ligar", description="Liga a LLM local (LM Studio)")
+@app_commands.describe(modelo="Qual modelo carregar (padrao: o ultimo usado)")
+@app_commands.autocomplete(modelo=_llm_autocomplete_modelo)
+async def llm_ligar(interaction: discord.Interaction, modelo: str | None = None):
+    global LLM_MODELO
+    await interaction.response.defer()
+
+    if await asyncio.to_thread(_algum_mc_servidor_rodando):
+        await interaction.followup.send(
+            "Nao da pra ligar a LLM local com um servidor de Minecraft ligado - "
+            "os dois juntos passariam do limite de RAM da maquina. Desligue o servidor primeiro."
+        )
+        return
+
+    if await asyncio.to_thread(_llm_servidor_rodando):
+        await interaction.followup.send("A LLM local ja esta ligada.")
+        return
+
+    modelo_escolhido = modelo or LLM_MODELO
+
+    resultado = await asyncio.to_thread(
+        subprocess.run, [LMS_CLI, "load", modelo_escolhido, "-y"], capture_output=True, text=True
+    )
+    if resultado.returncode != 0:
+        print(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+        await interaction.followup.send("Nao consegui carregar o modelo da LLM.")
+        return
+
+    resultado = await asyncio.to_thread(
+        subprocess.run, [LMS_CLI, "server", "start"], capture_output=True, text=True
+    )
+    if resultado.returncode != 0:
+        print(f"Erro ao iniciar servidor da LLM: {resultado.stderr}")
+        await interaction.followup.send("Modelo carregado, mas nao consegui iniciar o servidor.")
+        return
+
+    LLM_MODELO = modelo_escolhido
+    await interaction.followup.send(f"LLM local ligada com o modelo `{modelo_escolhido}` e pronta para uso.")
+
+
+@tree.command(name="llm_desligar", description="Desliga a LLM local (LM Studio)")
+async def llm_desligar(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    if not await asyncio.to_thread(_llm_servidor_rodando):
+        await interaction.followup.send("A LLM local ja esta desligada.")
+        return
+
+    await asyncio.to_thread(subprocess.run, [LMS_CLI, "server", "stop"], capture_output=True, text=True)
+    await asyncio.to_thread(subprocess.run, [LMS_CLI, "unload", "--all"], capture_output=True, text=True)
+    await interaction.followup.send("LLM local desligada.")
+
+
+@tree.command(name="ajuda_llm", description="Explica como funciona a interacao com a LLM local")
+async def ajuda_llm(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embed = discord.Embed(title="Como funciona a LLM local", color=discord.Color.purple())
+    embed.add_field(
+        name="Como conversar",
+        value=(
+            "Mencione o bot (`@nome_do_bot pergunta`) em qualquer canal, ou mande uma "
+            "mensagem direta (DM) para ele. O bot responde usando a LLM rodando na "
+            "maquina local, via LM Studio."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Memoria de conversa",
+        value=(
+            f"O bot lembra as ultimas {LLM_HISTORICO_MAX_MENSAGENS} mensagens de cada conversa "
+            "(por canal + pessoa). Use `/llm_esquecer` para comecar uma conversa do zero."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Ligar/desligar/trocar",
+        value=(
+            f"`/llm_ligar` carrega o modelo (`{LLM_MODELO}`) e liga o servidor local. "
+            "`/llm_desligar` desliga tudo e libera a RAM usada. "
+            "`/llm_trocar` troca o modelo sem desligar o servidor."
+        ),
+        inline=False,
+    )
+
+    modelos = await asyncio.to_thread(_llm_modelos_disponiveis)
+    if modelos:
+        linhas = [f"`{modelo}` - {LLM_DESCRICOES.get(modelo, 'Modelo geral.')}" for modelo in modelos]
+        embed.add_field(name="Modelos disponiveis", value="\n".join(linhas), inline=False)
+
+    embed.add_field(
+        name="Se nao responder",
+        value="A LLM local precisa estar ligada (`/llm_ligar`) para o bot conseguir responder. Confira com `/status`.",
+        inline=False,
+    )
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="llm_esquecer", description="Limpa a memoria da sua conversa atual com a LLM")
+async def llm_esquecer(interaction: discord.Interaction):
+    guild_id = interaction.guild.id if interaction.guild else None
+    chave = (guild_id, interaction.channel.id, interaction.user.id)
+    existia = _llm_historico.pop(chave, None) is not None
+
+    if existia:
+        await interaction.response.send_message("Memoria da conversa apagada.", ephemeral=True)
+    else:
+        await interaction.response.send_message("Voce ainda nao tinha conversa guardada aqui.", ephemeral=True)
+
+
+@tree.command(name="llm_trocar", description="Troca o modelo da LLM local, sem desligar o servidor")
+@app_commands.describe(modelo="Novo modelo a carregar")
+@app_commands.autocomplete(modelo=_llm_autocomplete_modelo)
+async def llm_trocar(interaction: discord.Interaction, modelo: str):
+    global LLM_MODELO
+    await interaction.response.defer()
+
+    if not await asyncio.to_thread(_llm_servidor_rodando):
+        await interaction.followup.send("A LLM local esta desligada. Use /llm_ligar para escolher o modelo.")
+        return
+
+    await asyncio.to_thread(subprocess.run, [LMS_CLI, "unload", "--all"], capture_output=True, text=True)
+
+    resultado = await asyncio.to_thread(
+        subprocess.run, [LMS_CLI, "load", modelo, "-y"], capture_output=True, text=True
+    )
+    if resultado.returncode != 0:
+        print(f"Erro ao carregar modelo da LLM: {resultado.stderr}")
+        await interaction.followup.send(f"Nao consegui carregar o modelo `{modelo}`.")
+        return
+
+    LLM_MODELO = modelo
+    await interaction.followup.send(f"Modelo trocado para `{modelo}`.")
 
 
 @tree.command(name="desligar", description="Desliga o bot (apenas o dono)")
