@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 bot.log
 xp.db
+playlists.db
+mc_config.json
+boas_vindas.json
+.DS_Store
+.vscode/
