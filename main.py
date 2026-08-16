@@ -4,6 +4,7 @@ import logging
 import time
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.cogs import llm as llm_cog
@@ -80,6 +81,66 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError) 
     if isinstance(error, commands.CommandNotFound):
         return
     raise error
+
+
+class TentarComandoNovamente(discord.ui.View):
+    """Mostrado quando a interacao original expira antes do bot conseguir
+    responder (o Discord so espera 3s pela primeira resposta). Ao clicar,
+    reexecuta o mesmo comando com os mesmos parametros, mas numa interacao
+    nova - com uma janela de 3s do zero."""
+
+    def __init__(self, comando: app_commands.Command, kwargs: dict, autor_id: int):
+        super().__init__(timeout=300)
+        self.comando = comando
+        self.kwargs = kwargs
+        self.autor_id = autor_id
+        self.mensagem: discord.Message | None = None
+
+    @discord.ui.button(label="Tentar de novo", style=discord.ButtonStyle.primary)
+    async def tentar(self, interaction: discord.Interaction, botao: discord.ui.Button) -> None:
+        if interaction.user.id != self.autor_id:
+            await interaction.response.send_message(
+                "So quem pediu o comando pode tentar de novo.", ephemeral=True
+            )
+            return
+
+        for item in self.children:
+            item.disabled = True
+        if self.mensagem is not None:
+            await self.mensagem.edit(view=self)
+        self.stop()
+
+        if self.comando.binding is not None:
+            await self.comando._callback(self.comando.binding, interaction, **self.kwargs)
+        else:
+            await self.comando._callback(interaction, **self.kwargs)
+
+
+@tree.error
+async def on_tree_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    comando = interaction.command
+    interacao_expirou = (
+        isinstance(error, app_commands.CommandInvokeError)
+        and isinstance(error.original, discord.NotFound)
+        and error.original.code == 10062
+    )
+
+    if interacao_expirou and comando is not None and interaction.channel is not None:
+        kwargs = {nome: valor for nome, valor in interaction.namespace}
+        view = TentarComandoNovamente(comando, kwargs, interaction.user.id)
+        view.mensagem = await interaction.channel.send(
+            f"{interaction.user.mention} a interacao expirou antes de eu conseguir responder ao "
+            f"`/{comando.qualified_name}` (o Discord so espera 3s pela primeira resposta).",
+            view=view,
+        )
+        return
+
+    if comando is not None:
+        if comando._has_any_error_handlers():
+            return
+        logger.error(f"Ignorando excecao no comando {comando.name!r}", exc_info=error)
+    else:
+        logger.error("Ignorando excecao na arvore de comandos", exc_info=error)
 
 
 @bot.event
