@@ -20,7 +20,6 @@ from bot.config import (
     LMS_CLI,
     LM_STUDIO_URL,
 )
-from bot.ram import _ram_verificar_ou_mensagem
 
 logger = logging.getLogger(__name__)
 
@@ -88,14 +87,6 @@ def _llm_modelos_info() -> list[dict]:
         return json.loads(resultado.stdout)
     except json.JSONDecodeError:
         return []
-
-
-def _llm_tamanho_gb(modelo: str) -> float | None:
-    for info in _llm_modelos_info():
-        if info.get("modelKey") == modelo:
-            tamanho = info.get("sizeBytes")
-            return tamanho / (1024**3) if tamanho else None
-    return None
 
 
 def _llm_modelos_disponiveis() -> list[str]:
@@ -196,12 +187,6 @@ async def _llm_iniciar_servidor() -> bool:
 
 
 async def _llm_auto_ligar() -> tuple[bool, str]:
-    tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, LLM_MODELO)
-    if tamanho_gb is not None:
-        erro_ram = await _ram_verificar_ou_mensagem(tamanho_gb, "ligar a LLM agora")
-        if erro_ram:
-            return False, erro_ram
-
     if not await _llm_carregar_modelo(LLM_MODELO):
         return False, "Nao consegui ligar a LLM local agora."
 
@@ -263,13 +248,6 @@ async def _llm_acao_ligar(interaction: discord.Interaction, modelo: str | None =
         return
 
     modelo_escolhido = modelo or LLM_MODELO
-
-    tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, modelo_escolhido)
-    if tamanho_gb is not None:
-        erro_ram = await _ram_verificar_ou_mensagem(tamanho_gb, f"carregar `{modelo_escolhido}` agora")
-        if erro_ram:
-            await interaction.followup.send(erro_ram)
-            return
 
     if not await _llm_carregar_modelo(modelo_escolhido):
         await interaction.followup.send("Nao consegui carregar o modelo da LLM.")
@@ -360,13 +338,6 @@ async def _llm_acao_trocar(interaction: discord.Interaction, modelo: str) -> Non
         return
 
     await asyncio.to_thread(subprocess.run, [LMS_CLI, "unload", "--all"], capture_output=True, text=True)
-
-    tamanho_gb = await asyncio.to_thread(_llm_tamanho_gb, modelo)
-    if tamanho_gb is not None:
-        erro_ram = await _ram_verificar_ou_mensagem(tamanho_gb, f"trocar para `{modelo}`")
-        if erro_ram:
-            await interaction.followup.send(erro_ram)
-            return
 
     if not await _llm_carregar_modelo(modelo):
         await interaction.followup.send(f"Nao consegui carregar o modelo `{modelo}`.")

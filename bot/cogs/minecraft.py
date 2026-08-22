@@ -26,7 +26,6 @@ from bot.config import (
 )
 from bot.jsonstore import escrever_json, ler_json
 from bot.permissions import requer_manage_guild
-from bot.ram import _ram_verificar_ou_mensagem
 
 logger = logging.getLogger(__name__)
 
@@ -541,11 +540,6 @@ async def _mc_aguardar_pronto(mensagem: discord.Message, config: dict, mensagem_
 
 async def _mc_acao_ligar(interaction: discord.Interaction, config: dict) -> None:
     await interaction.response.defer()
-
-    erro_ram = await _ram_verificar_ou_mensagem(config.get("ram_gb", 2), f"ligar {config['nome']}")
-    if erro_ram:
-        await interaction.followup.send(erro_ram)
-        return
 
     async with _mc_lock(config["chave"]):
         if await asyncio.to_thread(_mc_servidor_rodando, config):
