@@ -16,6 +16,7 @@ BOT_INICIO = time.time()
 
 intents = discord.Intents.default()
 intents.members = True  # necessario para o evento de boas-vindas (on_member_join)
+intents.message_content = True  # necessario para ler o texto de mensagens normais (ponte de chat do MC)
 
 # Cogs de feature, carregados um a um conforme vao sendo extraidos de main.py.
 EXTENSOES = [
