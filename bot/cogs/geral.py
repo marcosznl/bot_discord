@@ -21,7 +21,7 @@ from bot.config import MC_SERVERS_DIR
 # criado, renomeado ou removido (as descricoes vem direto de cada comando).
 COMANDOS_CATEGORIAS = {
     "Geral": ["ping", "status", "ajuda"],
-    "Moderacao": ["limpar", "boasvindas"],
+    "Moderacao": ["limpar", "boasvindas", "autodelete"],
     "Niveis": ["xp"],
     "Diversao": ["gif", "socao", "abraco", "charme"],
     "Musica": ["musica", "playlist"],

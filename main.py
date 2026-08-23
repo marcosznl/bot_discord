@@ -29,6 +29,7 @@ EXTENSOES = [
     "bot.cogs.llm",
     "bot.cogs.geral",
     "bot.cogs.admin",
+    "bot.cogs.autodelete",
 ]
 
 
@@ -171,6 +172,9 @@ async def on_ready():
     cog_xp = bot.get_cog("XP")
     if not cog_xp.verificar_xp_semana.is_running():
         cog_xp.verificar_xp_semana.start()
+    cog_autodelete = bot.get_cog("AutoDelete")
+    if not cog_autodelete.limpar_canais_configurados.is_running():
+        cog_autodelete.limpar_canais_configurados.start()
 
     if llm_cog._llm_ultima_interacao is None and await asyncio.to_thread(llm_cog._llm_servidor_rodando):
         # A LLM ja estava ligada antes deste (re)inicio do bot (ex: restart durante
