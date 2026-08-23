@@ -710,8 +710,13 @@ def _mc_montar_tellraw(nome_autor: str, texto: str) -> str:
     # json.dumps escapa aspas/backslash do nome e da mensagem - sem isso, uma
     # mensagem do Discord com aspas quebraria o JSON do tellraw ou injetaria
     # texto fora do campo esperado.
-    mensagem = {"text": f"[Discord] {nome_autor}: {texto}"}
-    return f"tellraw @a {json.dumps(mensagem)}"
+    componentes = [
+        "",
+        {"text": "[Discord] ", "color": "blue"},
+        {"text": f"{nome_autor}: ", "color": "yellow"},
+        {"text": texto, "color": "white"},
+    ]
+    return f"tellraw @a {json.dumps(componentes)}"
 
 
 async def _mc_encaminhar_mensagem_discord(message: discord.Message) -> None:
