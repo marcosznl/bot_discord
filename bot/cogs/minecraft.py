@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -705,6 +706,26 @@ async def _mc_autocomplete_servidor(interaction: discord.Interaction, atual: str
     ][:25]
 
 
+def _mc_montar_tellraw(nome_autor: str, texto: str) -> str:
+    # json.dumps escapa aspas/backslash do nome e da mensagem - sem isso, uma
+    # mensagem do Discord com aspas quebraria o JSON do tellraw ou injetaria
+    # texto fora do campo esperado.
+    mensagem = {"text": f"[Discord] {nome_autor}: {texto}"}
+    return f"tellraw @a {json.dumps(mensagem)}"
+
+
+async def _mc_encaminhar_mensagem_discord(message: discord.Message) -> None:
+    comando = _mc_montar_tellraw(message.author.display_name, message.clean_content)
+    servidores = await asyncio.to_thread(_mc_servers_atual)
+    for config in servidores.values():
+        if not await asyncio.to_thread(_mc_servidor_pronto, config):
+            continue
+        try:
+            await asyncio.to_thread(_mc_rcon_comando, config, comando)
+        except Exception as erro:
+            logger.error(f"Erro ao encaminhar mensagem do Discord para {config['nome']}: {erro}")
+
+
 async def _mc_avisar_crash(bot: commands.Bot, config: dict) -> None:
     logger.warning(f"{config['nome']} parou de responder inesperadamente (possivel crash).")
     if MC_CHAT_CHANNEL_ID:
@@ -723,6 +744,14 @@ class Minecraft(commands.Cog):
     def cog_unload(self) -> None:
         self.monitorar_chat_minecraft.cancel()
         self.verificar_mc_ocioso.cancel()
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.content:
+            return
+        if not MC_CHAT_CHANNEL_ID or message.channel.id != MC_CHAT_CHANNEL_ID:
+            return
+        await _mc_encaminhar_mensagem_discord(message)
 
     @tasks.loop(seconds=2)
     async def monitorar_chat_minecraft(self):
