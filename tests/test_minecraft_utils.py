@@ -35,7 +35,7 @@ def test_ler_propriedade_arquivo_inexistente(tmp_path):
 
 def test_inferir_comando_run_sh(tmp_path):
     (tmp_path / "run.sh").write_text("#!/bin/sh\n")
-    assert _mc_inferir_comando(str(tmp_path)) == ["./run.sh"]
+    assert _mc_inferir_comando(str(tmp_path)) == ["./run.sh", "nogui"]
 
 
 def test_inferir_comando_prefere_jar_conhecido(tmp_path):

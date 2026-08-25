@@ -79,7 +79,11 @@ def _mc_persistir_ajuste(chave: str, ajustes: dict) -> None:
 
 def _mc_inferir_comando(caminho: str) -> list[str] | None:
     if os.path.isfile(os.path.join(caminho, "run.sh")):
-        return ["./run.sh"]
+        # "nogui" evita que o servidor abra uma janela grafica (Swing) junto
+        # do processo - alguns run.sh ja tem isso fixo no proprio script
+        # (nesse caso o argumento so se repete, sem problema), outros exigem
+        # que quem chama passe explicitamente.
+        return ["./run.sh", "nogui"]
 
     try:
         arquivos = os.listdir(caminho)
