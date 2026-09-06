@@ -1,7 +1,6 @@
 from bot.cogs.minecraft import (
     _formatar_duracao,
     _mc_escrever_propriedade,
-    _mc_inferir_comando,
     _mc_ler_propriedade,
 )
 
@@ -31,23 +30,3 @@ def test_ler_e_escrever_propriedade(tmp_path):
 def test_ler_propriedade_arquivo_inexistente(tmp_path):
     config = {"dir": str(tmp_path)}
     assert _mc_ler_propriedade(config, "motd") is None
-
-
-def test_inferir_comando_run_sh(tmp_path):
-    (tmp_path / "run.sh").write_text("#!/bin/sh\n")
-    assert _mc_inferir_comando(str(tmp_path)) == ["./run.sh", "nogui"]
-
-
-def test_inferir_comando_prefere_jar_conhecido(tmp_path):
-    (tmp_path / "outro.jar").write_text("")
-    (tmp_path / "paper.jar").write_text("")
-    comando = _mc_inferir_comando(str(tmp_path))
-    assert comando == ["java", "-Xmx2G", "-jar", "paper.jar", "nogui"]
-
-
-def test_inferir_comando_pasta_vazia(tmp_path):
-    assert _mc_inferir_comando(str(tmp_path)) is None
-
-
-def test_inferir_comando_pasta_inexistente(tmp_path):
-    assert _mc_inferir_comando(str(tmp_path / "nao_existe")) is None

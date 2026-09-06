@@ -27,6 +27,7 @@ from bot.config import (
 )
 from bot.jsonstore import escrever_json, ler_json
 from bot.permissions import requer_manage_guild
+from bot.retry_ui import ModalComRetry, ViewComRetry
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,8 @@ def _formatar_duracao(segundos: int) -> str:
     return f"{minutos}m"
 
 
-# Servidores de Minecraft conhecidos/configurados manualmente. Qualquer outra
-# pasta dentro de MC_SERVERS_DIR que tenha um server.properties e descoberta
-# automaticamente em tempo real por _mc_servers_atual() - nao precisa mexer
-# aqui para adicionar/remover um servidor, so criar ou apagar a pasta.
+# Servidores de Minecraft conhecidos/configurados manualmente. Pra adicionar
+# ou remover um servidor, e preciso editar aqui.
 MC_SERVERS = {
     "ftbskies2": {
         "nome": "ftbskies2",
@@ -64,8 +63,6 @@ MC_SERVERS = {
 # descobertos automaticamente, para sobreviver a reinicios do bot.
 MC_CONFIG_PATH = os.path.join(BASE_DIR, "mc_config.json")
 
-MC_JARS_PREFERIDOS = ("server.jar", "run.jar", "paper.jar", "purpur.jar", "spigot.jar")
-
 
 def _mc_config_bruta() -> dict:
     return ler_json(MC_CONFIG_PATH)
@@ -75,31 +72,35 @@ def _mc_persistir_ajuste(chave: str, ajustes: dict) -> None:
     dados = _mc_config_bruta()
     dados.setdefault(chave, {}).update(ajustes)
     escrever_json(MC_CONFIG_PATH, dados)
+    _mc_invalidar_cache_servidores()
 
 
-def _mc_inferir_comando(caminho: str) -> list[str] | None:
-    if os.path.isfile(os.path.join(caminho, "run.sh")):
-        # "nogui" evita que o servidor abra uma janela grafica (Swing) junto
-        # do processo - alguns run.sh ja tem isso fixo no proprio script
-        # (nesse caso o argumento so se repete, sem problema), outros exigem
-        # que quem chama passe explicitamente.
-        return ["./run.sh", "nogui"]
+_mc_servers_cache: dict | None = None
+_mc_servers_cache_ts: float = 0.0
+# Descobrir servidores (ler o config + listar MC_SERVERS_DIR) e I/O que quase
+# nunca muda - cachear por alguns segundos evita reescanear o disco em toda
+# mensagem de chat encaminhada e a cada tick do loop de 2s que monitora o chat.
+MC_SERVERS_CACHE_SEGUNDOS = 30
 
-    try:
-        arquivos = os.listdir(caminho)
-    except FileNotFoundError:
-        return None
 
-    jars = [f for f in arquivos if f.lower().endswith(".jar")]
-    if not jars:
-        return None
-
-    preferidos = [j for j in jars if j.lower() in MC_JARS_PREFERIDOS]
-    jar = preferidos[0] if preferidos else sorted(jars)[0]
-    return ["java", "-Xmx2G", "-jar", jar, "nogui"]
+def _mc_invalidar_cache_servidores() -> None:
+    global _mc_servers_cache
+    _mc_servers_cache = None
 
 
 def _mc_servers_atual() -> dict:
+    global _mc_servers_cache, _mc_servers_cache_ts
+    agora = time.time()
+    if _mc_servers_cache is not None and agora - _mc_servers_cache_ts < MC_SERVERS_CACHE_SEGUNDOS:
+        return _mc_servers_cache
+
+    servidores = _mc_servers_atual_sem_cache()
+    _mc_servers_cache = servidores
+    _mc_servers_cache_ts = agora
+    return servidores
+
+
+def _mc_servers_atual_sem_cache() -> dict:
     persistido = _mc_config_bruta()
     servidores = {}
 
@@ -107,8 +108,6 @@ def _mc_servers_atual() -> dict:
         servidores[chave] = dict(config)
         if chave in persistido and "ram_gb" in persistido[chave]:
             servidores[chave]["ram_gb"] = persistido[chave]["ram_gb"]
-
-    portas_usadas = {cfg["rcon_port"] for cfg in servidores.values() if cfg.get("rcon_port")}
 
     # Reaproveita servidores descobertos em varreduras anteriores, se a pasta ainda existir.
     for chave, valores in persistido.items():
@@ -125,45 +124,9 @@ def _mc_servers_atual() -> dict:
             "ram_gb": valores.get("ram_gb", 2),
             "descoberto": True,
         }
-        portas_usadas.add(valores["rcon_port"])
 
     for chave, config in servidores.items():
         config["chave"] = chave
-
-    if not os.path.isdir(MC_SERVERS_DIR):
-        return servidores
-
-    proxima_porta = 25585
-    for nome_pasta in sorted(os.listdir(MC_SERVERS_DIR)):
-        if nome_pasta in servidores:
-            continue
-        caminho = os.path.join(MC_SERVERS_DIR, nome_pasta)
-        if not os.path.isdir(caminho) or not os.path.isfile(os.path.join(caminho, "server.properties")):
-            continue
-
-        comando = _mc_inferir_comando(caminho)
-        if comando is None:
-            continue
-
-        while proxima_porta in portas_usadas:
-            proxima_porta += 1
-        portas_usadas.add(proxima_porta)
-
-        config = {
-            "nome": nome_pasta,
-            "dir": caminho,
-            "comando": comando,
-            "rcon_port": proxima_porta,
-            "ram_gb": 2,
-            "descoberto": True,
-            "chave": nome_pasta,
-        }
-        _mc_garantir_rcon(config)
-        servidores[nome_pasta] = config
-        _mc_persistir_ajuste(
-            nome_pasta,
-            {"nome": config["nome"], "comando": config["comando"], "rcon_port": config["rcon_port"], "descoberto": True},
-        )
 
     return servidores
 
@@ -223,20 +186,6 @@ def _mc_escrever_propriedade(config, chave: str, valor: str) -> None:
 
     with open(caminho, "w", encoding="utf-8") as arquivo:
         arquivo.writelines(linhas)
-
-
-def _mc_garantir_rcon(config: dict) -> None:
-    porta_atual = _mc_ler_propriedade(config, "rcon.port")
-    if (
-        _mc_ler_propriedade(config, "enable-rcon") == "true"
-        and porta_atual == str(config["rcon_port"])
-        and _mc_ler_propriedade(config, "rcon.password")
-    ):
-        return
-
-    _mc_escrever_propriedade(config, "enable-rcon", "true")
-    _mc_escrever_propriedade(config, "rcon.password", MC_RCON_SENHA)
-    _mc_escrever_propriedade(config, "rcon.port", str(config["rcon_port"]))
 
 
 def _mc_definir_ram(config: dict, ram_gb: int) -> None:
@@ -606,7 +555,7 @@ async def _mc_acao_reiniciar(interaction: discord.Interaction, config: dict) -> 
         await _mc_aguardar_pronto(mensagem, config, f"{config['nome']} reiniciado e pronto para conexoes!")
 
 
-class ModalComandoMC(discord.ui.Modal, title="Executar comando"):
+class ModalComandoMC(ModalComRetry, title="Executar comando"):
     comando = discord.ui.TextInput(label="Comando (sem a barra)", placeholder="gamemode creative NomeDoJogador", max_length=200)
 
     def __init__(self, config: dict):
@@ -617,7 +566,7 @@ class ModalComandoMC(discord.ui.Modal, title="Executar comando"):
         await _mc_acao_comando(interaction, self.config, str(self.comando))
 
 
-class ModalEditarServidorMC(discord.ui.Modal):
+class ModalEditarServidorMC(ModalComRetry):
     def __init__(self, config: dict):
         super().__init__(title=f"Editar {config['nome']}"[:45])
         self.config = config
@@ -670,21 +619,27 @@ class ModalEditarServidorMC(discord.ui.Modal):
         )
 
 
-class BotoesMC(discord.ui.View):
+class BotoesMC(ViewComRetry):
     def __init__(self, config: dict):
         super().__init__(timeout=600)
         self.config = config
 
     @discord.ui.button(label="Ligar", style=discord.ButtonStyle.success)
     async def ligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        if not await requer_manage_guild(interaction):
+            return
         await _mc_acao_ligar(interaction, self.config)
 
     @discord.ui.button(label="Desligar", style=discord.ButtonStyle.danger)
     async def desligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        if not await requer_manage_guild(interaction):
+            return
         await _mc_acao_desligar(interaction, self.config)
 
     @discord.ui.button(label="Reiniciar", style=discord.ButtonStyle.secondary)
     async def reiniciar(self, interaction: discord.Interaction, botao: discord.ui.Button):
+        if not await requer_manage_guild(interaction):
+            return
         await _mc_acao_reiniciar(interaction, self.config)
 
     @discord.ui.button(label="Comando", style=discord.ButtonStyle.primary)
@@ -835,7 +790,7 @@ class Minecraft(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            f"O que voce quer fazer com o **{config['nome']}**?", view=BotoesMC(config)
+            f"O que voce quer fazer com o **{config['nome']}**?", view=BotoesMC(config), ephemeral=True
         )
 
 
