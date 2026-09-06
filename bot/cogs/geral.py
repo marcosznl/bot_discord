@@ -1,6 +1,9 @@
 import asyncio
+import json
+import logging
 import os
 import platform
+import subprocess
 
 import discord
 import psutil
@@ -17,18 +20,29 @@ from bot.cogs.minecraft import (
 )
 from bot.config import MC_SERVERS_DIR
 
+logger = logging.getLogger(__name__)
+
 # Categorias mostradas pelo /ajuda. Atualizar aqui sempre que um comando for
 # criado, renomeado ou removido (as descricoes vem direto de cada comando).
 COMANDOS_CATEGORIAS = {
     "Geral": ["ping", "status", "ajuda"],
-    "Moderacao": ["limpar", "boasvindas", "autodelete"],
+    "Moderacao": ["limpar", "boasvindas"],
     "Niveis": ["xp"],
     "Diversao": ["gif", "socao", "abraco", "charme"],
-    "Musica": ["musica", "playlist"],
+    "Musica": ["musica"],
     "Minecraft": ["mc"],
     "LLM": ["llm"],
-    "Administracao (dono)": ["desligar", "reiniciar", "velocidade_server"],
 }
+
+
+def _teste_velocidade() -> dict:
+    resultado = subprocess.run(
+        ["speedtest", "--accept-license", "--accept-gdpr", "--format=json"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return json.loads(resultado.stdout)
 
 
 def _todos_comandos_registrados(bot: commands.Bot) -> dict[str, app_commands.Command]:
@@ -42,9 +56,7 @@ def _todos_comandos_registrados(bot: commands.Bot) -> dict[str, app_commands.Com
     return resultado
 
 
-async def _status_acao_maquina(interaction: discord.Interaction) -> None:
-    await interaction.response.defer()
-
+async def _status_embed_maquina() -> discord.Embed:
     cpu = await asyncio.to_thread(psutil.cpu_percent, interval=1)
     ram = psutil.virtual_memory()
     if platform.system() == "Windows":
@@ -62,23 +74,45 @@ async def _status_acao_maquina(interaction: discord.Interaction) -> None:
         f"{ram.percent}% ({(ram.total - ram.available) // (1024 ** 3)}GB / {ram.total // (1024 ** 3)}GB)",
         f"{disk.percent}% ({disk.used // (1024 ** 3)}GB / {disk.total // (1024 ** 3)}GB)",
     ]
+
+    try:
+        dados_velocidade = await asyncio.to_thread(_teste_velocidade)
+    except Exception as erro:
+        logger.error(f"Erro no teste de velocidade: {erro}")
+        topicos.append("Internet")
+        valores.append("Nao consegui testar agora")
+    else:
+        download_mbps = dados_velocidade["download"]["bandwidth"] * 8 / 1_000_000
+        upload_mbps = dados_velocidade["upload"]["bandwidth"] * 8 / 1_000_000
+        ping_ms = dados_velocidade["ping"]["latency"]
+        topicos += ["Download", "Upload", "Ping"]
+        valores += [f"{download_mbps:.1f} Mbps", f"{upload_mbps:.1f} Mbps", f"{ping_ms:.0f} ms"]
+        servidor_speedtest = dados_velocidade["server"]
+        embed.set_footer(text=f"Speedtest via: {servidor_speedtest['name']} ({servidor_speedtest['location']})")
+
     embed.add_field(name="Recurso", value="\n".join(topicos), inline=True)
     embed.add_field(name="Valor", value="\n".join(valores), inline=True)
-    await interaction.followup.send(embed=embed)
+    return embed
 
 
-async def _status_acao_minecraft(interaction: discord.Interaction) -> None:
-    await interaction.response.defer()
-
+async def _status_embed_minecraft() -> discord.Embed:
     servidores = await asyncio.to_thread(_mc_servers_atual)
 
-    embed_servidores = discord.Embed(title="Servidores de Minecraft", color=discord.Color.green())
+    embed_servidores = discord.Embed(title="Servidor de Minecraft", color=discord.Color.green())
+
+    if not servidores:
+        embed_servidores.description = "Nenhum servidor encontrado em " + MC_SERVERS_DIR
+        return embed_servidores
+
+    algum_ligado = False
+    campos = []
     for config in servidores.values():
         tempo = await asyncio.to_thread(_mc_tempo_ligado, config)
         if tempo is None:
-            embed_servidores.add_field(name=config["nome"], value="Desligado", inline=False)
+            campos.append((config["nome"], "Desligado"))
             continue
 
+        algum_ligado = True
         pronto = await asyncio.to_thread(_mc_servidor_pronto, config)
         linhas = [f"**Status:** {'Ligado ha ' + tempo if pronto else f'Ligando... ({tempo})'}"]
 
@@ -91,55 +125,41 @@ async def _status_acao_minecraft(interaction: discord.Interaction) -> None:
             if jogadores:
                 linhas.append(f"**Jogadores:** {jogadores}")
 
-        embed_servidores.add_field(name=config["nome"], value="\n".join(linhas), inline=False)
+        campos.append((config["nome"], "\n".join(linhas)))
 
-    if not servidores:
-        embed_servidores.description = "Nenhum servidor encontrado em " + MC_SERVERS_DIR
-
-    await interaction.followup.send(embed=embed_servidores)
-
-
-async def _status_acao_llm(interaction: discord.Interaction) -> None:
-    await interaction.response.defer()
-
-    embed_llm = discord.Embed(title="Inteligencia Artificial", color=discord.Color.purple())
-    if await asyncio.to_thread(llm_cog._llm_servidor_rodando):
-        ram_mb = await asyncio.to_thread(llm_cog._llm_ram_mb)
-        parametros = await asyncio.to_thread(llm_cog._llm_parametros, llm_cog.LLM_MODELO)
-        finalidade = llm_cog.LLM_DESCRICOES.get(llm_cog.LLM_MODELO, "Modelo geral.")
-
-        topicos_llm = ["Status", "Modelo"]
-        valores_llm = ["Ligada", llm_cog.LLM_MODELO]
-        if ram_mb is not None:
-            topicos_llm.append("RAM")
-            valores_llm.append(f"{ram_mb}MB")
-        topicos_llm.append("Parametros")
-        valores_llm.append(parametros or "?")
-        topicos_llm.append("Finalidade")
-        valores_llm.append(finalidade)
+    if algum_ligado:
+        for nome, valor in campos:
+            embed_servidores.add_field(name=nome, value=valor, inline=False)
     else:
-        topicos_llm = ["Status"]
-        valores_llm = ["Desligada"]
+        embed_servidores.description = "Nenhum servidor ligado no momento"
+
+    return embed_servidores
+
+
+async def _status_embed_llm() -> discord.Embed:
+    embed_llm = discord.Embed(title="Inteligencia Artificial", color=discord.Color.purple())
+
+    if not await asyncio.to_thread(llm_cog._llm_servidor_rodando):
+        embed_llm.description = "Nenhum modelo rodando no momento"
+        return embed_llm
+
+    ram_mb = await asyncio.to_thread(llm_cog._llm_ram_mb)
+    parametros = await asyncio.to_thread(llm_cog._llm_parametros, llm_cog.LLM_MODELO)
+    finalidade = llm_cog.LLM_DESCRICOES.get(llm_cog.LLM_MODELO, "Modelo geral.")
+
+    topicos_llm = ["Modelo"]
+    valores_llm = [llm_cog.LLM_MODELO]
+    if ram_mb is not None:
+        topicos_llm.append("RAM")
+        valores_llm.append(f"{ram_mb}MB")
+    topicos_llm.append("Parametros")
+    valores_llm.append(parametros or "?")
+    topicos_llm.append("Finalidade")
+    valores_llm.append(finalidade)
+
     embed_llm.add_field(name="Info", value="\n".join(topicos_llm), inline=True)
     embed_llm.add_field(name="Valor", value="\n".join(valores_llm), inline=True)
-    await interaction.followup.send(embed=embed_llm)
-
-
-class BotoesStatus(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=600)
-
-    @discord.ui.button(label="Servidor", style=discord.ButtonStyle.primary)
-    async def maquina(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _status_acao_maquina(interaction)
-
-    @discord.ui.button(label="Minecraft", style=discord.ButtonStyle.success)
-    async def minecraft(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _status_acao_minecraft(interaction)
-
-    @discord.ui.button(label="LLM", style=discord.ButtonStyle.secondary)
-    async def llm(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _status_acao_llm(interaction)
+    return embed_llm
 
 
 class Geral(commands.Cog):
@@ -180,7 +200,13 @@ class Geral(commands.Cog):
     @app_commands.command(name="status", description="Mostra o status da maquina, servidores de Minecraft e LLM")
     @app_commands.guild_only()
     async def status(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Qual status voce quer ver?", view=BotoesStatus())
+        await interaction.response.defer()
+        embeds = [
+            await _status_embed_maquina(),
+            await _status_embed_minecraft(),
+            await _status_embed_llm(),
+        ]
+        await interaction.followup.send(embeds=embeds)
 
 
 async def setup(bot: commands.Bot):

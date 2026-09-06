@@ -1,18 +1,15 @@
 import asyncio
-import json
 import logging
 import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from bot.cogs import llm as llm_cog
-from bot.config import STATUS_SEM_SERVIDOR, TOKEN
+from bot.config import TOKEN
 
 logger = logging.getLogger(__name__)
-
-BOT_INICIO = time.time()
 
 intents = discord.Intents.default()
 intents.members = True  # necessario para o evento de boas-vindas (on_member_join)
@@ -23,13 +20,10 @@ EXTENSOES = [
     "bot.cogs.boasvindas",
     "bot.cogs.diversao",
     "bot.cogs.musica",
-    "bot.cogs.playlist",
     "bot.cogs.xp",
     "bot.cogs.minecraft",
     "bot.cogs.llm",
     "bot.cogs.geral",
-    "bot.cogs.admin",
-    "bot.cogs.autodelete",
 ]
 
 
@@ -39,40 +33,21 @@ class ArcoBot(commands.Bot):
             await self.load_extension(extensao)
 
 
-bot = ArcoBot(command_prefix=commands.when_mentioned, intents=intents)
+bot = ArcoBot(
+    command_prefix=commands.when_mentioned,
+    intents=intents,
+    activity=discord.Game(name="Dattebayo!"),
+    # Nada aqui usa guild.members ou cache de membros - so o intent e
+    # necessario (pro evento on_member_join). Sem isso, toda reconexao baixava
+    # a lista inteira de membros de cada servidor a toa.
+    chunk_guilds_at_startup=False,
+)
 tree = bot.tree
 
-
-def _formatar_duracao(segundos: int) -> str:
-    horas, segundos_restantes = divmod(segundos, 3600)
-    minutos, _ = divmod(segundos_restantes, 60)
-    if horas:
-        return f"{horas}h{minutos}m"
-    return f"{minutos}m"
-
-
-def _bot_tempo_ligado() -> str:
-    return _formatar_duracao(int(time.time() - BOT_INICIO))
-
-
-async def _change_presence_multipla(atividades: list) -> None:
-    payload = {
-        "op": bot.ws.PRESENCE,
-        "d": {
-            "activities": [a.to_dict() for a in atividades],
-            "afk": False,
-            "since": 0,
-            "status": "online",
-        },
-    }
-    await bot.ws.send(json.dumps(payload))
-
-
-@tasks.loop(seconds=60)
-async def atualizar_presence():
-    atividade_jogo = discord.Game(name=f"{STATUS_SEM_SERVIDOR} {_bot_tempo_ligado()}")
-    atividade_custom = discord.CustomActivity(name=atividade_jogo.name)
-    await _change_presence_multipla([atividade_jogo, atividade_custom])
+# on_ready dispara em toda reconexao de gateway, nao so na primeira - essa
+# flag evita ressincronizar a arvore de comandos (bulk_upsert, sujeito a rate
+# limit) toda vez que a rede pisca. So false de novo se a propria sync falhar.
+_arvore_sincronizada = False
 
 
 @bot.event
@@ -156,8 +131,6 @@ async def on_tree_error(interaction: discord.Interaction, error: app_commands.Ap
 
 @bot.event
 async def on_ready():
-    if not atualizar_presence.is_running():
-        atualizar_presence.start()
     cog_musica = bot.get_cog("Musica")
     if not cog_musica.verificar_ocioso_voz.is_running():
         cog_musica.verificar_ocioso_voz.start()
@@ -172,9 +145,6 @@ async def on_ready():
     cog_xp = bot.get_cog("XP")
     if not cog_xp.verificar_xp_semana.is_running():
         cog_xp.verificar_xp_semana.start()
-    cog_autodelete = bot.get_cog("AutoDelete")
-    if not cog_autodelete.limpar_canais_configurados.is_running():
-        cog_autodelete.limpar_canais_configurados.start()
 
     if llm_cog._llm_ultima_interacao is None and await asyncio.to_thread(llm_cog._llm_servidor_rodando):
         # A LLM ja estava ligada antes deste (re)inicio do bot (ex: restart durante
@@ -182,9 +152,15 @@ async def on_ready():
         # de fato desde quando ela esta sem uso.
         llm_cog._llm_ultima_interacao = time.time()
 
-    app_info = await bot.application_info()
-    bot.owner_id = app_info.owner.id
-    await tree.sync()
+    if bot.owner_id is None:
+        app_info = await bot.application_info()
+        bot.owner_id = app_info.owner.id
+
+    global _arvore_sincronizada
+    if not _arvore_sincronizada:
+        await tree.sync()
+        _arvore_sincronizada = True
+
     logger.info(f"Bot conectado como {bot.user}")
 
 

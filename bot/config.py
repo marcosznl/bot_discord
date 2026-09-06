@@ -8,7 +8,7 @@ load_dotenv()
 # arquivos de dados (json/sqlite) independente de onde o cog em si esteja.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Pasta com os bancos sqlite (xp.db, playlists.db).
+# Pasta com os bancos sqlite (xp.db).
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -36,10 +36,6 @@ LLM_MODELO = os.getenv("LLM_MODELO", "google/gemma-4-e4b")
 LLM_AUTO_DESLIGAR_SEGUNDOS = 180
 # Quantas mensagens (usuario + assistente) ficam guardadas por conversa.
 LLM_HISTORICO_MAX_MENSAGENS = 50
-
-# Texto personalizavel do status do bot: usado no Custom Status (balao ao lado
-# do avatar) e tambem no "Jogando X" quando nenhum servidor esta ligado.
-STATUS_SEM_SERVIDOR = os.getenv("STATUS_SEM_SERVIDOR", "Tempo acordado")
 
 # Pasta que contem as subpastas de cada servidor de Minecraft (uma por
 # servidor, com o nome usado em "dir" abaixo). Editavel via .env para migrar
