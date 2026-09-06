@@ -52,21 +52,6 @@ def test_xp_nao_fica_negativo(tmp_path, monkeypatch):
     assert depois == 0
 
 
-def test_xp_optout_alterna(tmp_path, monkeypatch):
-    monkeypatch.setattr(xp, "XP_DB_PATH", str(tmp_path / "xp_teste.db"))
-    guild_id, user_id = 1, 2
-
-    assert xp._xp_esta_fora(guild_id, user_id) is False
-
-    fora = xp._xp_alternar_optout(guild_id, user_id)
-    assert fora is True
-    assert xp._xp_esta_fora(guild_id, user_id) is True
-
-    fora = xp._xp_alternar_optout(guild_id, user_id)
-    assert fora is False
-    assert xp._xp_esta_fora(guild_id, user_id) is False
-
-
 def test_xp_ativo_desativo(tmp_path, monkeypatch):
     monkeypatch.setattr(xp, "XP_DB_PATH", str(tmp_path / "xp_teste.db"))
     guild_id = 1

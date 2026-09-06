@@ -12,6 +12,7 @@ from discord.ext import commands, tasks
 from bot import sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_manage_guild
+from bot.retry_ui import ModalComRetry, ViewComRetry
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,13 @@ XP_MAX_POR_MENSAGEM = 25
 _xp_cooldowns: dict[tuple[int, int], float] = {}
 
 
-def _xp_conectar_bd() -> sqlite3.Connection:
-    conexao = sqlite3.connect(XP_DB_PATH)
+# Bancos ja preparados por _xp_garantir_schema (por caminho de arquivo) - evita
+# refazer CREATE TABLE/PRAGMA/ALTER em toda mensagem so pra checar um schema
+# que so muda quando o codigo muda.
+_xp_schemas_prontos: set[str] = set()
+
+
+def _xp_garantir_schema(conexao: sqlite3.Connection) -> None:
     conexao.execute(
         "CREATE TABLE IF NOT EXISTS xp_usuarios ("
         "guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, xp INTEGER NOT NULL DEFAULT 0, "
@@ -34,10 +40,6 @@ def _xp_conectar_bd() -> sqlite3.Connection:
     if "xp_semana" not in colunas:
         conexao.execute("ALTER TABLE xp_usuarios ADD COLUMN xp_semana INTEGER NOT NULL DEFAULT 0")
     conexao.execute("CREATE TABLE IF NOT EXISTS xp_desativado (guild_id INTEGER PRIMARY KEY)")
-    conexao.execute(
-        "CREATE TABLE IF NOT EXISTS xp_optout (guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
-        "PRIMARY KEY (guild_id, user_id))"
-    )
     conexao.execute("CREATE TABLE IF NOT EXISTS xp_periodo (guild_id INTEGER PRIMARY KEY, semana TEXT)")
     colunas_periodo = [linha[1] for linha in conexao.execute("PRAGMA table_info(xp_periodo)")]
     if "inicio" in colunas_periodo:
@@ -52,6 +54,13 @@ def _xp_conectar_bd() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS xp_cargos (guild_id INTEGER NOT NULL, nivel INTEGER NOT NULL, "
         "role_id INTEGER NOT NULL, PRIMARY KEY (guild_id, nivel))"
     )
+
+
+def _xp_conectar_bd() -> sqlite3.Connection:
+    conexao = sqlite3.connect(XP_DB_PATH)
+    if XP_DB_PATH not in _xp_schemas_prontos:
+        _xp_garantir_schema(conexao)
+        _xp_schemas_prontos.add(XP_DB_PATH)
     return conexao
 
 
@@ -135,30 +144,6 @@ def _xp_leaderboard_semana(guild_id: int, limite: int = 10) -> list[tuple[int, i
         "ORDER BY xp_semana DESC LIMIT ?",
         (guild_id, limite),
     )
-
-
-def _xp_esta_fora(guild_id: int, user_id: int) -> bool:
-    linha = sqlitestore.consultar_um(
-        _xp_conectar_bd, "SELECT 1 FROM xp_optout WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
-    )
-    return linha is not None
-
-
-def _xp_alternar_optout(guild_id: int, user_id: int) -> bool:
-    with _xp_conectar_bd() as conexao:
-        ja_fora = conexao.execute(
-            "SELECT 1 FROM xp_optout WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
-        ).fetchone()
-        if ja_fora:
-            conexao.execute(
-                "DELETE FROM xp_optout WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
-            )
-        else:
-            conexao.execute(
-                "INSERT INTO xp_optout (guild_id, user_id) VALUES (?, ?)", (guild_id, user_id)
-            )
-        conexao.commit()
-    return not ja_fora
 
 
 def _xp_semana_atual() -> str:
@@ -295,17 +280,7 @@ async def _xp_acao_leaderboard_semana(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed)
 
 
-async def _xp_acao_optout(interaction: discord.Interaction) -> None:
-    fora = await asyncio.to_thread(_xp_alternar_optout, interaction.guild.id, interaction.user.id)
-    texto = (
-        "Voce nao vai mais ganhar XP neste servidor. Use o mesmo botao para voltar quando quiser."
-        if fora
-        else "Voce voltou a ganhar XP neste servidor."
-    )
-    await interaction.response.send_message(texto, ephemeral=True)
-
-
-class ConfirmarResetXP(discord.ui.View):
+class ConfirmarResetXP(ViewComRetry):
     def __init__(self, guild_id: int, autor_id: int):
         super().__init__(timeout=30)
         self.guild_id = guild_id
@@ -359,7 +334,7 @@ async def _xp_acao_dar_remover(interaction: discord.Interaction, guild_id: int, 
     await interaction.response.send_message(texto, ephemeral=True)
 
 
-class ModalQuantidadeXP(discord.ui.Modal, title="Dar/remover XP"):
+class ModalQuantidadeXP(ModalComRetry, title="Dar/remover XP"):
     quantidade = discord.ui.TextInput(label="Quantidade (negativo para remover)", placeholder="100", max_length=10)
 
     def __init__(self, guild_id: int, membro: discord.Member):
@@ -377,7 +352,7 @@ class ModalQuantidadeXP(discord.ui.Modal, title="Dar/remover XP"):
         await _xp_acao_dar_remover(interaction, self.guild_id, self.membro, valor)
 
 
-class SelecionarUsuarioXP(discord.ui.View):
+class SelecionarUsuarioXP(ViewComRetry):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -390,7 +365,7 @@ class SelecionarUsuarioXP(discord.ui.View):
         await interaction.response.send_modal(ModalQuantidadeXP(self.guild_id, membro))
 
 
-class SelecionarCargoNivel(discord.ui.View):
+class SelecionarCargoNivel(ViewComRetry):
     def __init__(self, guild_id: int, nivel: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -407,7 +382,7 @@ class SelecionarCargoNivel(discord.ui.View):
         )
 
 
-class ModalNivelCargo(discord.ui.Modal, title="Cargo por nivel"):
+class ModalNivelCargo(ModalComRetry, title="Cargo por nivel"):
     nivel = discord.ui.TextInput(label="Nivel", placeholder="ex: 5", max_length=5)
 
     def __init__(self, guild_id: int):
@@ -429,7 +404,7 @@ class ModalNivelCargo(discord.ui.Modal, title="Cargo por nivel"):
         )
 
 
-class ModalRemoverCargoNivel(discord.ui.Modal, title="Remover cargo por nivel"):
+class ModalRemoverCargoNivel(ModalComRetry, title="Remover cargo por nivel"):
     nivel = discord.ui.TextInput(label="Nivel a remover", placeholder="ex: 5", max_length=5)
 
     def __init__(self, guild_id: int):
@@ -450,7 +425,7 @@ class ModalRemoverCargoNivel(discord.ui.Modal, title="Remover cargo por nivel"):
             )
 
 
-class BotoesCargosXP(discord.ui.View):
+class BotoesCargosXP(ViewComRetry):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -475,7 +450,7 @@ class BotoesCargosXP(discord.ui.View):
         await interaction.response.send_modal(ModalRemoverCargoNivel(self.guild_id))
 
 
-class BotoesXPConfig(discord.ui.View):
+class BotoesXPConfig(ViewComRetry):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -560,11 +535,6 @@ async def _xp_acao_ajuda(interaction: discord.Interaction) -> None:
         inline=False,
     )
     embed.add_field(
-        name="Nao quer ganhar XP?",
-        value="Use o botao Sair/Entrar no XP para parar (ou voltar) de ganhar XP neste servidor, sem afetar ninguem mais.",
-        inline=False,
-    )
-    embed.add_field(
         name="Comandos",
         value="Use `/xp` e os botoes Meu rank / Leaderboard para ver seu nivel e o ranking do servidor.",
         inline=False,
@@ -572,7 +542,7 @@ async def _xp_acao_ajuda(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=embed)
 
 
-class BotoesXP(discord.ui.View):
+class BotoesXP(ViewComRetry):
     def __init__(self):
         super().__init__(timeout=600)
 
@@ -587,10 +557,6 @@ class BotoesXP(discord.ui.View):
     @discord.ui.button(label="Leaderboard semanal", style=discord.ButtonStyle.secondary)
     async def leaderboard_semana(self, interaction: discord.Interaction, botao: discord.ui.Button):
         await _xp_acao_leaderboard_semana(interaction)
-
-    @discord.ui.button(label="Sair/Entrar no XP", style=discord.ButtonStyle.secondary)
-    async def optout(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _xp_acao_optout(interaction)
 
     @discord.ui.button(label="Ajuda", style=discord.ButtonStyle.secondary)
     async def ajuda(self, interaction: discord.Interaction, botao: discord.ui.Button):
@@ -613,11 +579,7 @@ class XP(commands.Cog):
         if message.author.bot:
             return
 
-        if (
-            message.guild is not None
-            and await asyncio.to_thread(_xp_ativo, message.guild.id)
-            and not await asyncio.to_thread(_xp_esta_fora, message.guild.id, message.author.id)
-        ):
+        if message.guild is not None and await asyncio.to_thread(_xp_ativo, message.guild.id):
             chave = (message.guild.id, message.author.id)
             agora = time.time()
             if agora - _xp_cooldowns.get(chave, 0) >= XP_COOLDOWN_SEGUNDOS:
@@ -656,7 +618,7 @@ class XP(commands.Cog):
     @app_commands.guild_only()
     async def xp(self, interaction: discord.Interaction):
         await interaction.response.send_message(
-            "O que voce quer fazer com o sistema de XP?", view=BotoesXP()
+            "O que voce quer fazer com o sistema de XP?", view=BotoesXP(), ephemeral=True
         )
 
 
