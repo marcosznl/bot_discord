@@ -20,6 +20,7 @@ from bot.config import (
     LMS_CLI,
     LM_STUDIO_URL,
 )
+from bot.retry_ui import ViewComRetry
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +349,7 @@ async def _llm_acao_trocar(interaction: discord.Interaction, modelo: str) -> Non
     await interaction.followup.send(f"Modelo trocado para `{modelo}`.")
 
 
-class SelecionarModeloLLM(discord.ui.View):
+class SelecionarModeloLLM(ViewComRetry):
     def __init__(self, modelos: list[str]):
         super().__init__(timeout=600)
         select = discord.ui.Select(
@@ -363,7 +364,7 @@ class SelecionarModeloLLM(discord.ui.View):
         await _llm_acao_trocar(interaction, modelo)
 
 
-class BotoesLLM(discord.ui.View):
+class BotoesLLM(ViewComRetry):
     def __init__(self):
         super().__init__(timeout=600)
 
