@@ -20,6 +20,7 @@ from bot.config import (
     LMS_CLI,
     LM_STUDIO_URL,
 )
+from bot.permissions import requer_usuario_autorizado
 from bot.retry_ui import ViewComRetry
 
 logger = logging.getLogger(__name__)
@@ -99,17 +100,6 @@ def _llm_parametros(modelo: str) -> str | None:
         if info.get("modelKey") == modelo:
             return info.get("paramsString")
     return None
-
-
-async def _llm_autocomplete_modelo(
-    interaction: discord.Interaction, atual: str
-) -> list[app_commands.Choice[str]]:
-    modelos = await asyncio.to_thread(_llm_modelos_disponiveis)
-    return [
-        app_commands.Choice(name=modelo, value=modelo)
-        for modelo in modelos
-        if atual.lower() in modelo.lower()
-    ][:25]
 
 
 def _llm_chave_conversa(message: discord.Message) -> tuple[int | None, int, int]:
@@ -431,9 +421,12 @@ class LLM(commands.Cog):
         logger.info(f"LLM local desligada automaticamente por ficar {minutos} minutos sem uso.")
 
     @app_commands.command(name="llm", description="Controla a LLM local")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def llm(self, interaction: discord.Interaction):
+        if not await requer_usuario_autorizado(interaction):
+            return
+
         await interaction.response.send_message(
             "O que voce quer fazer com a LLM local?", view=BotoesLLM(), ephemeral=True
         )

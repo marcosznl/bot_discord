@@ -43,3 +43,22 @@ LLM_HISTORICO_MAX_MENSAGENS = 50
 MC_SERVERS_DIR = os.path.expanduser(os.getenv("MC_SERVERS_DIR", "~/server_minecraft"))
 
 MC_RCON_SENHA = os.getenv("MC_RCON_SENHA", "")
+
+# Intervalo entre checagens de novos videos dos canais do YouTube acompanhados.
+YOUTUBE_VERIFICAR_INTERVALO_MINUTOS = 60
+# Pasta onde os videos sao baixados (tanto /baixarvideo quanto o aviso
+# automatico de video novo) - baixados direto em Python (yt-dlp), sem depender
+# de nenhum atalho do macOS.
+YOUTUBE_DOWNLOAD_DIR = os.path.expanduser(
+    os.getenv(
+        "YOUTUBE_DOWNLOAD_DIR",
+        "~/Library/Mobile Documents/com~apple~CloudDocs/Youtube Download",
+    )
+)
+
+# IDs do Discord autorizados a usar os comandos pessoais do bot (youtube,
+# baixarvideo, baixaraudio, mc, llm) tanto por DM quanto no servidor - lista
+# editavel no .env (separada por virgula) sem precisar mexer no codigo.
+USUARIOS_AUTORIZADOS = {
+    int(uid) for uid in os.getenv("USUARIOS_AUTORIZADOS", "139432275984121856,494115635681558528").split(",") if uid.strip()
+}

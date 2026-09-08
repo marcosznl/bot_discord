@@ -25,7 +25,8 @@ class Diversao(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="gif", description="Busca um gif pela palavra-chave")
-    @app_commands.guild_only()
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.describe(busca="Palavra-chave para buscar o gif")
     async def gif(self, interaction: discord.Interaction, busca: str):
         await interaction.response.defer()

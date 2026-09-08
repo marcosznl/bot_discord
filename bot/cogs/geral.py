@@ -32,6 +32,7 @@ COMANDOS_CATEGORIAS = {
     "Musica": ["musica"],
     "Minecraft": ["mc"],
     "LLM": ["llm"],
+    "YouTube": ["youtube", "baixarvideo", "baixaraudio"],
 }
 
 
@@ -167,7 +168,8 @@ class Geral(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="ping", description="Testa se o bot esta online")
-    @app_commands.guild_only()
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.send_message("Pong!")
 
@@ -181,7 +183,8 @@ class Geral(commands.Cog):
         await interaction.delete_original_response()
 
     @app_commands.command(name="ajuda", description="Mostra todos os comandos do bot, por categoria")
-    @app_commands.guild_only()
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def ajuda(self, interaction: discord.Interaction):
         comandos_por_nome = _todos_comandos_registrados(self.bot)
 
@@ -198,7 +201,8 @@ class Geral(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="status", description="Mostra o status da maquina, servidores de Minecraft e LLM")
-    @app_commands.guild_only()
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     async def status(self, interaction: discord.Interaction):
         await interaction.response.defer()
         embeds = [

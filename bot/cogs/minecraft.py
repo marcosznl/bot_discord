@@ -26,7 +26,7 @@ from bot.config import (
     MC_SHUTDOWN_TIMEOUT,
 )
 from bot.jsonstore import escrever_json, ler_json
-from bot.permissions import requer_manage_guild
+from bot.permissions import requer_usuario_autorizado
 from bot.retry_ui import ModalComRetry, ViewComRetry
 
 logger = logging.getLogger(__name__)
@@ -626,31 +626,31 @@ class BotoesMC(ViewComRetry):
 
     @discord.ui.button(label="Ligar", style=discord.ButtonStyle.success)
     async def ligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if not await requer_manage_guild(interaction):
+        if not await requer_usuario_autorizado(interaction):
             return
         await _mc_acao_ligar(interaction, self.config)
 
     @discord.ui.button(label="Desligar", style=discord.ButtonStyle.danger)
     async def desligar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if not await requer_manage_guild(interaction):
+        if not await requer_usuario_autorizado(interaction):
             return
         await _mc_acao_desligar(interaction, self.config)
 
     @discord.ui.button(label="Reiniciar", style=discord.ButtonStyle.secondary)
     async def reiniciar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if not await requer_manage_guild(interaction):
+        if not await requer_usuario_autorizado(interaction):
             return
         await _mc_acao_reiniciar(interaction, self.config)
 
     @discord.ui.button(label="Comando", style=discord.ButtonStyle.primary)
     async def comando(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if not await requer_manage_guild(interaction):
+        if not await requer_usuario_autorizado(interaction):
             return
         await interaction.response.send_modal(ModalComandoMC(self.config))
 
     @discord.ui.button(label="Editar", style=discord.ButtonStyle.secondary)
     async def editar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        if not await requer_manage_guild(interaction):
+        if not await requer_usuario_autorizado(interaction):
             return
         await interaction.response.send_modal(ModalEditarServidorMC(self.config))
 
@@ -777,11 +777,14 @@ class Minecraft(commands.Cog):
                     await canal.send(f"{config['nome']} foi desligado automaticamente por ficar {minutos} minutos sem jogadores.")
 
     @app_commands.command(name="mc", description="Controla servidores de Minecraft")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=True)
     @app_commands.describe(servidor="Qual servidor")
     @app_commands.autocomplete(servidor=_mc_autocomplete_servidor)
     async def mc(self, interaction: discord.Interaction, servidor: str):
+        if not await requer_usuario_autorizado(interaction):
+            return
+
         servidores = await asyncio.to_thread(_mc_servers_atual)
         config = servidores.get(servidor)
         if config is None:
