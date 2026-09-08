@@ -421,8 +421,9 @@ class LLM(commands.Cog):
         logger.info(f"LLM local desligada automaticamente por ficar {minutos} minutos sem uso.")
 
     @app_commands.command(name="llm", description="Controla a LLM local")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.allowed_installs(guilds=True, users=True)
+    # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
+    @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=False, users=True)
     async def llm(self, interaction: discord.Interaction):
         if not await requer_usuario_autorizado(interaction):
             return

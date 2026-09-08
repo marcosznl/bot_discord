@@ -615,8 +615,9 @@ class Youtube(commands.Cog):
                     )
 
     @app_commands.command(name="youtube", description="Configura seus avisos de novos videos de canais do YouTube")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.allowed_installs(guilds=True, users=True)
+    # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
+    @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=False, users=True)
     async def youtube(self, interaction: discord.Interaction):
         if not await requer_usuario_autorizado(interaction, "esse comando"):
             return
@@ -629,8 +630,9 @@ class Youtube(commands.Cog):
 
     @app_commands.command(name="baixarvideo", description="Baixa o video de um link, mostrando o progresso")
     @app_commands.describe(link="Link do video (ex: YouTube) para baixar")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.allowed_installs(guilds=True, users=True)
+    # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
+    @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=False, users=True)
     async def baixarvideo(self, interaction: discord.Interaction, link: str):
         if not await requer_usuario_autorizado(interaction, "esse comando"):
             return
@@ -652,8 +654,9 @@ class Youtube(commands.Cog):
 
     @app_commands.command(name="baixaraudio", description="Baixa so o audio (MP3) de um link, mostrando o progresso")
     @app_commands.describe(link="Link do video (ex: YouTube) para baixar o audio")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.allowed_installs(guilds=True, users=True)
+    # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
+    @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=False, users=True)
     async def baixaraudio(self, interaction: discord.Interaction, link: str):
         if not await requer_usuario_autorizado(interaction, "esse comando"):
             return

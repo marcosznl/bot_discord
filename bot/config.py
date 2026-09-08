@@ -60,5 +60,5 @@ YOUTUBE_DOWNLOAD_DIR = os.path.expanduser(
 # baixarvideo, baixaraudio, mc, llm) tanto por DM quanto no servidor - lista
 # editavel no .env (separada por virgula) sem precisar mexer no codigo.
 USUARIOS_AUTORIZADOS = {
-    int(uid) for uid in os.getenv("USUARIOS_AUTORIZADOS", "139432275984121856,494115635681558528").split(",") if uid.strip()
+    int(uid) for uid in os.getenv("USUARIOS_AUTORIZADOS", "").split(",") if uid.strip()
 }

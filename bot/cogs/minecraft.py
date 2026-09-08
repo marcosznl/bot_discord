@@ -777,8 +777,9 @@ class Minecraft(commands.Cog):
                     await canal.send(f"{config['nome']} foi desligado automaticamente por ficar {minutos} minutos sem jogadores.")
 
     @app_commands.command(name="mc", description="Controla servidores de Minecraft")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.allowed_installs(guilds=True, users=True)
+    # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
+    @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=False, users=True)
     @app_commands.describe(servidor="Qual servidor")
     @app_commands.autocomplete(servidor=_mc_autocomplete_servidor)
     async def mc(self, interaction: discord.Interaction, servidor: str):

@@ -19,20 +19,18 @@ from bot.cogs.minecraft import (
     _mc_tempo_ligado,
 )
 from bot.config import MC_SERVERS_DIR
+from bot.permissions import requer_usuario_autorizado
 
 logger = logging.getLogger(__name__)
 
 # Categorias mostradas pelo /ajuda. Atualizar aqui sempre que um comando for
 # criado, renomeado ou removido (as descricoes vem direto de cada comando).
 COMANDOS_CATEGORIAS = {
-    "Geral": ["ping", "status", "ajuda"],
+    "Geral": ["ping", "ajuda"],
     "Moderacao": ["limpar", "boasvindas"],
     "Niveis": ["xp"],
     "Diversao": ["gif", "socao", "abraco", "charme"],
     "Musica": ["musica"],
-    "Minecraft": ["mc"],
-    "LLM": ["llm"],
-    "YouTube": ["youtube", "baixarvideo", "baixaraudio"],
 }
 
 
@@ -201,9 +199,13 @@ class Geral(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="status", description="Mostra o status da maquina, servidores de Minecraft e LLM")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-    @app_commands.allowed_installs(guilds=True, users=True)
+    # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
+    @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=False, users=True)
     async def status(self, interaction: discord.Interaction):
+        if not await requer_usuario_autorizado(interaction, "esse comando"):
+            return
+
         await interaction.response.defer()
         embeds = [
             await _status_embed_maquina(),
