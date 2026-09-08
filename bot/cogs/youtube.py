@@ -41,20 +41,25 @@ _CHANNEL_ID_RE = re.compile(
 # nenhum atalho do macOS. "noplaylist" evita repetir o incidente de baixar o
 # canal inteiro por engano. "outtmpl" e definido por download (ver
 # _youtube_pasta_destino), nao aqui.
+# "bv*+ba/b" (em vez de so "bestvideo+bestaudio/best") garante pegar a maior
+# resolucao/bitrate disponivel mesmo quando isso exige juntar formatos que o
+# seletor "bv" sozinho descartaria. Sem restringir "player_client": forcar
+# so web+android fazia o YouTube devolver so formatos baixos (chegava a cair
+# pra 360p) por causa do experimento SABR-only da Google nesses clients -
+# deixando o yt-dlp escolher os clients (padrao dele) e que realmente traz a
+# qualidade maxima real do video (testado: ate 4K quando o video tem).
 YTDLP_DOWNLOAD_OPTS = {
-    "format": "bestvideo+bestaudio/best",
+    "format": "bv*+ba/b",
     "merge_output_format": "mp4",
     "noplaylist": True,
     "quiet": True,
-    "extractor_args": {"youtube": {"player_client": ["web", "android"]}},
 }
 # Mesma ideia, mas so audio - usada pelo /baixaraudio. O ffmpeg que extrai o
 # MP3 e o mesmo que ja faz a mesclagem de video+audio acima.
 YTDLP_DOWNLOAD_AUDIO_OPTS = {
-    "format": "bestaudio/best",
+    "format": "ba/b",
     "noplaylist": True,
     "quiet": True,
-    "extractor_args": {"youtube": {"player_client": ["web", "android"]}},
     "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
 }
 # Passo de progresso do /baixarvideo e intervalo minimo entre edicoes da
