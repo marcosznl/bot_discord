@@ -23,7 +23,6 @@ EXTENSOES = [
     "bot.cogs.xp",
     "bot.cogs.minecraft",
     "bot.cogs.llm",
-    "bot.cogs.youtube",
     "bot.cogs.geral",
 ]
 

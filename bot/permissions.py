@@ -5,9 +5,8 @@ from bot.config import USUARIOS_AUTORIZADOS
 
 async def requer_usuario_autorizado(interaction: discord.Interaction, alvo: str = "esse comando") -> bool:
     """Confere se quem chamou esta na lista de USUARIOS_AUTORIZADOS - usado
-    pelos comandos pessoais (baixarvideo, baixaraudio, mc, llm, status), que
-    so funcionam por DM, onde nao existe cargo/permissao de servidor pra
-    checar."""
+    pelos comandos pessoais (mc, llm, status), que so funcionam por DM, onde
+    nao existe cargo/permissao de servidor pra checar."""
     if interaction.user.id not in USUARIOS_AUTORIZADOS:
         await interaction.response.send_message(f"Voce nao tem autorizacao para usar {alvo}.", ephemeral=True)
         return False
