@@ -7,6 +7,5 @@ data/
 .pytest_cache/
 mc_config.json
 boas_vindas.json
-youtube.json
 .DS_Store
 .vscode/

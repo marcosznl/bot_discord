@@ -146,9 +146,6 @@ async def on_ready():
     cog_xp = bot.get_cog("XP")
     if not cog_xp.verificar_xp_semana.is_running():
         cog_xp.verificar_xp_semana.start()
-    cog_youtube = bot.get_cog("Youtube")
-    if not cog_youtube.verificar_novos_videos.is_running():
-        cog_youtube.verificar_novos_videos.start()
 
     if llm_cog._llm_ultima_interacao is None and await asyncio.to_thread(llm_cog._llm_servidor_rodando):
         # A LLM ja estava ligada antes deste (re)inicio do bot (ex: restart durante
