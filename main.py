@@ -1,19 +1,15 @@
-import asyncio
 import logging
-import time
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.cogs import llm as llm_cog
 from bot.config import TOKEN
 
 logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.members = True  # necessario para o evento de boas-vindas (on_member_join)
-intents.message_content = True  # necessario para ler o texto de mensagens normais (ponte de chat do MC)
 
 # Cogs de feature, carregados um a um conforme vao sendo extraidos de main.py.
 EXTENSOES = [
@@ -21,8 +17,6 @@ EXTENSOES = [
     "bot.cogs.diversao",
     "bot.cogs.musica",
     "bot.cogs.xp",
-    "bot.cogs.minecraft",
-    "bot.cogs.llm",
     "bot.cogs.geral",
 ]
 
@@ -52,9 +46,9 @@ _arvore_sincronizada = False
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
-    # O bot so usa slash commands - quando alguem menciona o bot (ex: "@bot oi"
-    # para falar com a LLM), o discord.py tenta interpretar isso como prefixo
-    # de comando de texto e gera esse erro a toa. Ignorado de proposito.
+    # O bot so usa slash commands - quando alguem menciona o bot, o discord.py
+    # tenta interpretar isso como prefixo de comando de texto e gera esse erro
+    # a toa. Ignorado de proposito.
     if isinstance(error, commands.CommandNotFound):
         return
     raise error
@@ -134,23 +128,9 @@ async def on_ready():
     cog_musica = bot.get_cog("Musica")
     if not cog_musica.verificar_ocioso_voz.is_running():
         cog_musica.verificar_ocioso_voz.start()
-    cog_mc = bot.get_cog("Minecraft")
-    if not cog_mc.monitorar_chat_minecraft.is_running():
-        cog_mc.monitorar_chat_minecraft.start()
-    if not cog_mc.verificar_mc_ocioso.is_running():
-        cog_mc.verificar_mc_ocioso.start()
-    cog_llm = bot.get_cog("LLM")
-    if not cog_llm.verificar_llm_ociosa.is_running():
-        cog_llm.verificar_llm_ociosa.start()
     cog_xp = bot.get_cog("XP")
     if not cog_xp.verificar_xp_semana.is_running():
         cog_xp.verificar_xp_semana.start()
-
-    if llm_cog._llm_ultima_interacao is None and await asyncio.to_thread(llm_cog._llm_servidor_rodando):
-        # A LLM ja estava ligada antes deste (re)inicio do bot (ex: restart durante
-        # desenvolvimento) - conta a partir de agora, ja que nao ha como saber
-        # de fato desde quando ela esta sem uso.
-        llm_cog._llm_ultima_interacao = time.time()
 
     if bot.owner_id is None:
         app_info = await bot.application_info()
