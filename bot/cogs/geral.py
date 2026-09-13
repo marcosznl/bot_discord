@@ -10,15 +10,6 @@ import psutil
 from discord import app_commands
 from discord.ext import commands
 
-from bot.cogs import llm as llm_cog
-from bot.cogs.minecraft import (
-    _mc_jogadores_online,
-    _mc_ram_mb,
-    _mc_servers_atual,
-    _mc_servidor_pronto,
-    _mc_tempo_ligado,
-)
-from bot.config import MC_SERVERS_DIR
 from bot.permissions import requer_usuario_autorizado
 
 logger = logging.getLogger(__name__)
@@ -94,73 +85,6 @@ async def _status_embed_maquina() -> discord.Embed:
     return embed
 
 
-async def _status_embed_minecraft() -> discord.Embed:
-    servidores = await asyncio.to_thread(_mc_servers_atual)
-
-    embed_servidores = discord.Embed(title="Servidor de Minecraft", color=discord.Color.green())
-
-    if not servidores:
-        embed_servidores.description = "Nenhum servidor encontrado em " + MC_SERVERS_DIR
-        return embed_servidores
-
-    algum_ligado = False
-    campos = []
-    for config in servidores.values():
-        tempo = await asyncio.to_thread(_mc_tempo_ligado, config)
-        if tempo is None:
-            campos.append((config["nome"], "Desligado"))
-            continue
-
-        algum_ligado = True
-        pronto = await asyncio.to_thread(_mc_servidor_pronto, config)
-        linhas = [f"**Status:** {'Ligado ha ' + tempo if pronto else f'Ligando... ({tempo})'}"]
-
-        ram_mb = await asyncio.to_thread(_mc_ram_mb, config)
-        if ram_mb is not None:
-            linhas.append(f"**RAM:** {ram_mb}MB")
-
-        if pronto:
-            jogadores = await asyncio.to_thread(_mc_jogadores_online, config)
-            if jogadores:
-                linhas.append(f"**Jogadores:** {jogadores}")
-
-        campos.append((config["nome"], "\n".join(linhas)))
-
-    if algum_ligado:
-        for nome, valor in campos:
-            embed_servidores.add_field(name=nome, value=valor, inline=False)
-    else:
-        embed_servidores.description = "Nenhum servidor ligado no momento"
-
-    return embed_servidores
-
-
-async def _status_embed_llm() -> discord.Embed:
-    embed_llm = discord.Embed(title="Inteligencia Artificial", color=discord.Color.purple())
-
-    if not await asyncio.to_thread(llm_cog._llm_servidor_rodando):
-        embed_llm.description = "Nenhum modelo rodando no momento"
-        return embed_llm
-
-    ram_mb = await asyncio.to_thread(llm_cog._llm_ram_mb)
-    parametros = await asyncio.to_thread(llm_cog._llm_parametros, llm_cog.LLM_MODELO)
-    finalidade = llm_cog.LLM_DESCRICOES.get(llm_cog.LLM_MODELO, "Modelo geral.")
-
-    topicos_llm = ["Modelo"]
-    valores_llm = [llm_cog.LLM_MODELO]
-    if ram_mb is not None:
-        topicos_llm.append("RAM")
-        valores_llm.append(f"{ram_mb}MB")
-    topicos_llm.append("Parametros")
-    valores_llm.append(parametros or "?")
-    topicos_llm.append("Finalidade")
-    valores_llm.append(finalidade)
-
-    embed_llm.add_field(name="Info", value="\n".join(topicos_llm), inline=True)
-    embed_llm.add_field(name="Valor", value="\n".join(valores_llm), inline=True)
-    return embed_llm
-
-
 class Geral(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -198,7 +122,7 @@ class Geral(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="status", description="Mostra o status da maquina, servidores de Minecraft e LLM")
+    @app_commands.command(name="status", description="Mostra o status da maquina")
     # So DM/chat privado - nao aparece em nenhum servidor (comando pessoal).
     @app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
     @app_commands.allowed_installs(guilds=False, users=True)
@@ -207,12 +131,7 @@ class Geral(commands.Cog):
             return
 
         await interaction.response.defer()
-        embeds = [
-            await _status_embed_maquina(),
-            await _status_embed_minecraft(),
-            await _status_embed_llm(),
-        ]
-        await interaction.followup.send(embeds=embeds)
+        await interaction.followup.send(embed=await _status_embed_maquina())
 
 
 async def setup(bot: commands.Bot):
