@@ -10,9 +10,9 @@ from bot.retry_ui import interacao_expirou, oferecer_tentar_de_novo
 logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
-intents.members = True  # boas-vindas e logs de entrada/saida (on_member_join/remove)
-# Conteudo das mensagens - so para o canal de logs mostrar o que foi apagado
-# ou editado. Precisa estar ligado em Developer Portal > Bot > Privileged
+intents.members = True  # boas-vindas, logs de entrada/saida, XP em call, aniversarios
+# Conteudo das mensagens - para o canal de logs mostrar o que foi apagado ou
+# editado, o jogo de contagem e o mural de destaques. Precisa estar ligado em Developer Portal > Bot > Privileged
 # Gateway Intents, senao o bot nem conecta.
 intents.message_content = True
 
@@ -24,6 +24,15 @@ EXTENSOES = [
     "bot.cogs.moderacao",
     "bot.cogs.info",
     "bot.cogs.comunidade",
+    "bot.cogs.sorteios",
+    "bot.cogs.sugestoes",
+    "bot.cogs.verificacao",
+    "bot.cogs.candidaturas",
+    "bot.cogs.voz",
+    "bot.cogs.aniversarios",
+    "bot.cogs.destaques",
+    "bot.cogs.contagem",
+    "bot.cogs.configuracao",
     "bot.cogs.geral",
 ]
 

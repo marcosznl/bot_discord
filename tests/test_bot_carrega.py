@@ -36,6 +36,7 @@ def test_comandos_serializam(bot_carregado):
     esperados = {
         "ping", "ajuda", "usuario", "avatar", "servidor", "mod", "logs", "automod", "boasvindas",
         "enquete", "cargos", "tickets", "evento", "lembrete", "xp", "interagir", "gif", "musica",
+        "sorteio", "sugerir", "verificacao", "candidaturas", "som", "sala", "aniversario", "configurar",
         "Ver perfil", "Ver avatar", "Ver rank XP", "Denunciar mensagem", "Fixar ou desafixar",
     }
     assert esperados <= nomes
@@ -53,7 +54,7 @@ def test_ajuda_cobre_todos_os_comandos(bot_carregado):
 
 def test_paineis_serializam(bot_carregado):
     from bot.cogs.comunidade import painel_tickets
-    from bot.cogs.geral import painel_ajuda
+    from bot.cogs.geral import COMANDOS_CATEGORIAS, PainelAjuda
     from bot.cogs.moderacao import PainelAutoMod
     from bot.cogs.musica import PainelMusica
     from bot.cogs.xp import BotoesXP
@@ -63,7 +64,7 @@ def test_paineis_serializam(bot_carregado):
     async def montar():
         guild_sem_voz = SimpleNamespace(id=1, voice_client=None)
         return [
-            painel_ajuda(bot),
+            *(PainelAjuda(bot, categoria) for categoria in [*COMANDOS_CATEGORIAS, "Clique direito"]),
             BotoesXP(),
             PainelMusica(guild_sem_voz),
             PainelAutoMod(bot, {}),
@@ -109,3 +110,25 @@ def test_regras_automod_montam():
         gatilho.to_metadata_dict()
         for acao in moderacao._acoes_regra(nome, 123):
             acao.to_dict()
+
+
+def test_paineis_dos_recursos_novos(bot_carregado):
+    from bot.cogs.candidaturas import ModalCandidatura
+    from bot.cogs.sorteios import painel_sorteio
+    from bot.cogs.sugestoes import painel_sugestao
+
+    _, loop = bot_carregado
+
+    async def montar():
+        sorteio = {
+            "id": 1, "premio": "Nitro", "termina_em": 2_000_000_000, "encerrado": 0, "ganhadores": [],
+            "vencedores": 2, "cargo_requerido": None, "participantes": 5, "criador_id": 9,
+        }
+        sugestao = {"id": 3, "autor_id": 9, "texto": "Canal de memes", "status": "analise", "resposta": None, "sim": 4, "nao": 1}
+        encerrado = dict(sorteio, encerrado=1, ganhadores=[10, 11])
+        return [painel_sorteio(sorteio), painel_sorteio(encerrado), painel_sugestao(sugestao)], ModalCandidatura(["Moderacao", "Eventos"])
+
+    views, modal = loop.run_until_complete(montar())
+    for view in views:
+        assert view.to_components()
+    assert len(modal.to_components()) == 5

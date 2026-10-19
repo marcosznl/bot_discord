@@ -14,6 +14,46 @@ NOMES_PERMISSOES = {
 }
 
 
+# Permissoes que um cargo entregue pelo bot por clique (painel de cargos,
+# verificacao, candidatura aprovada) nunca deveria dar - senao qualquer
+# membro viraria moderador com um botao.
+PERMISSOES_PERIGOSAS = discord.Permissions(
+    administrator=True,
+    manage_guild=True,
+    manage_roles=True,
+    manage_channels=True,
+    manage_messages=True,
+    manage_threads=True,
+    manage_webhooks=True,
+    manage_expressions=True,
+    manage_events=True,
+    kick_members=True,
+    ban_members=True,
+    moderate_members=True,
+    mention_everyone=True,
+    view_audit_log=True,
+)
+
+
+def cargo_perigoso(cargo: discord.Role) -> bool:
+    return bool(cargo.permissions.value & PERMISSOES_PERIGOSAS.value)
+
+
+def motivo_cargo_invalido(cargo: discord.Role, autor: discord.Member) -> str | None:
+    """Por que o bot nao deveria entregar esse cargo automaticamente (ou None
+    se pode)."""
+    guild = cargo.guild
+    if cargo.is_default() or cargo.managed:
+        return "e um cargo automatico (de bot, impulso ou @everyone)"
+    if cargo >= guild.me.top_role:
+        return "esta acima (ou no mesmo nivel) do meu cargo"
+    if autor.id != guild.owner_id and cargo >= autor.top_role:
+        return "esta acima (ou no mesmo nivel) do seu cargo"
+    if cargo_perigoso(cargo):
+        return "da permissoes de moderacao/administracao"
+    return None
+
+
 async def requer_permissao(interaction: discord.Interaction, permissao: str, alvo: str = "essa opcao") -> bool:
     """Confere se quem chamou esta num servidor e tem a permissao pedida; se
     nao, avisa e devolve False (o chamador deve so retornar nesse caso)."""

@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import io
 import logging
 import os
 import re
@@ -11,8 +12,9 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot import layout, sqlitestore
+from bot.cogs.moderacao import enviar_log
 from bot.config import DATA_DIR, FUSO
-from bot.permissions import requer_permissao
+from bot.permissions import cargo_perigoso, motivo_cargo_invalido, requer_permissao
 from bot.retry_ui import ViewComRetry
 
 logger = logging.getLogger(__name__)
@@ -21,25 +23,6 @@ COMUNIDADE_DB_PATH = os.path.join(DATA_DIR, "comunidade.db")
 LEMBRETES_MAX_POR_USUARIO = 25
 LEMBRETE_MAX_SEGUNDOS = 365 * 24 * 60 * 60
 CARGOS_MAX_POR_PAINEL = 20
-
-# Permissoes que um cargo de "pegue voce mesmo" nunca deveria dar - senao
-# qualquer membro viraria moderador com um clique.
-PERMISSOES_PERIGOSAS = discord.Permissions(
-    administrator=True,
-    manage_guild=True,
-    manage_roles=True,
-    manage_channels=True,
-    manage_messages=True,
-    manage_threads=True,
-    manage_webhooks=True,
-    manage_expressions=True,
-    manage_events=True,
-    kick_members=True,
-    ban_members=True,
-    moderate_members=True,
-    mention_everyone=True,
-    view_audit_log=True,
-)
 
 DURACOES_ENQUETE = [
     app_commands.Choice(name="1 hora", value=1),
@@ -185,19 +168,6 @@ def lembrete_apagar(lembrete_id: int) -> None:
 # ---------------------------------------------------------------- cargos por botao
 
 
-def _motivo_cargo_invalido(cargo: discord.Role, autor: discord.Member) -> str | None:
-    guild = cargo.guild
-    if cargo.is_default() or cargo.managed:
-        return "e um cargo automatico (de bot, impulso ou @everyone)"
-    if cargo >= guild.me.top_role:
-        return "esta acima (ou no mesmo nivel) do meu cargo"
-    if autor.id != guild.owner_id and cargo >= autor.top_role:
-        return "esta acima (ou no mesmo nivel) do seu cargo"
-    if cargo.permissions.value & PERMISSOES_PERIGOSAS.value:
-        return "da permissoes de moderacao/administracao"
-    return None
-
-
 class BotaoCargo(discord.ui.DynamicItem[discord.ui.Button], template=r"cargo:(?P<id>\d+)"):
     """Botao de um painel de /cargos: clicou, ganha o cargo; clicou de novo,
     perde. O id do cargo mora no custom_id, entao o painel continua
@@ -222,7 +192,7 @@ class BotaoCargo(discord.ui.DynamicItem[discord.ui.Button], template=r"cargo:(?P
             return
         # Confere de novo na hora do clique: as permissoes do cargo podem ter
         # mudado depois que o painel foi publicado.
-        if cargo.managed or cargo >= guild.me.top_role or cargo.permissions.value & PERMISSOES_PERIGOSAS.value:
+        if cargo.managed or cargo >= guild.me.top_role or cargo_perigoso(cargo):
             await interaction.response.send_message(
                 "Esse cargo nao pode mais ser pego por aqui - avise a moderacao.", ephemeral=True
             )
@@ -261,7 +231,7 @@ class EscolherCargosPainel(ViewComRetry):
 
     async def _escolhidos(self, interaction: discord.Interaction):
         cargos = sorted(self.select.values, key=lambda cargo: cargo.position, reverse=True)
-        invalidos = [(cargo, _motivo_cargo_invalido(cargo, interaction.user)) for cargo in cargos]
+        invalidos = [(cargo, motivo_cargo_invalido(cargo, interaction.user)) for cargo in cargos]
         invalidos = [(cargo, motivo) for cargo, motivo in invalidos if motivo]
         if invalidos:
             linhas = "\n".join(f"- {cargo.mention}: {motivo}" for cargo, motivo in invalidos)
@@ -328,7 +298,7 @@ class BotaoAbrirTicket(discord.ui.DynamicItem[discord.ui.Button], template=r"tic
                     f"{equipe} vai responder assim que puder.\n"
                     "-# So voce e a equipe veem esta conversa."
                 ),
-                layout.linha(BotaoFecharTicket(interaction.user.id)),
+                layout.linha(BotaoFecharTicket(interaction.user.id), BotaoExportarTicket()),
                 accent_color=discord.Color.blurple(),
             )
         )
@@ -359,7 +329,61 @@ class BotaoFecharTicket(discord.ui.DynamicItem[discord.ui.Button], template=r"ti
             await interaction.response.send_message("So quem abriu o ticket ou a moderacao pode fechar.", ephemeral=True)
             return
         await interaction.response.send_message(f"Ticket fechado por {interaction.user.mention}.")
+
+        # Guarda a conversa no canal de logs e manda uma copia para quem abriu.
+        conteudo = await transcrever_ticket(thread)
+        await enviar_log(
+            interaction.guild,
+            "Ticket fechado",
+            f"**Ticket:** {thread.mention} ({thread.name})\n**Aberto por:** <@{self.dono_id}>\n"
+            f"**Fechado por:** {interaction.user.mention}",
+            discord.Color.dark_grey(),
+            arquivo=discord.File(io.BytesIO(conteudo), filename=f"{thread.name}.txt"),
+        )
+        dono = interaction.guild.get_member(self.dono_id)
+        if dono is not None:
+            try:
+                await dono.send(
+                    f"Seu ticket em **{interaction.guild.name}** foi fechado. Segue a conversa:",
+                    file=discord.File(io.BytesIO(conteudo), filename=f"{thread.name}.txt"),
+                )
+            except discord.HTTPException:
+                pass
         await thread.edit(archived=True, locked=True, reason=f"Ticket fechado por {interaction.user}")
+
+
+class BotaoExportarTicket(discord.ui.DynamicItem[discord.ui.Button], template=r"ticket:exportar"):
+    def __init__(self):
+        super().__init__(
+            discord.ui.Button(label="Baixar conversa", emoji="📄", style=discord.ButtonStyle.secondary, custom_id="ticket:exportar")
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match):
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message("Isso so funciona dentro de um ticket.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        conteudo = await transcrever_ticket(interaction.channel)
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(conteudo), filename=f"{interaction.channel.name}.txt"), ephemeral=True
+        )
+
+
+async def transcrever_ticket(thread: discord.Thread, limite: int = 2000) -> bytes:
+    """Conversa do ticket em texto puro (mais antigas primeiro)."""
+    linhas = [f"Ticket: {thread.name}", f"Servidor: {thread.guild.name}", ""]
+    async for mensagem in thread.history(limit=limite, oldest_first=True):
+        quando = mensagem.created_at.astimezone(FUSO).strftime("%d/%m/%Y %H:%M")
+        texto = mensagem.content
+        if not texto and mensagem.components:
+            texto = "(painel do bot)"
+        anexos = " ".join(anexo.url for anexo in mensagem.attachments)
+        linhas.append(f"[{quando}] {mensagem.author}: {texto} {anexos}".rstrip())
+    return "\n".join(linhas).encode("utf-8")
 
 
 def painel_tickets(mensagem: str | None, cargo_id: int) -> discord.ui.LayoutView:
@@ -631,5 +655,5 @@ class Comunidade(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    bot.add_dynamic_items(BotaoCargo, BotaoAbrirTicket, BotaoFecharTicket)
+    bot.add_dynamic_items(BotaoCargo, BotaoAbrirTicket, BotaoFecharTicket, BotaoExportarTicket)
     await bot.add_cog(Comunidade(bot))

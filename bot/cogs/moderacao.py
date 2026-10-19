@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot import layout, sqlitestore
+from bot import configstore, layout, sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_hierarquia, requer_manage_guild, requer_permissao
 from bot.retry_ui import LayoutViewComRetry, ModalComRetry, ViewComRetry
@@ -43,6 +43,10 @@ MODO_LENTO = [
     app_commands.Choice(name="15 minutos", value=15 * 60),
     app_commands.Choice(name="1 hora", value=60 * 60),
 ]
+
+# {"limite": int, "acao": "silenciar"|"expulsar"|"banir", "duracao_min": int, "validade_dias": int}
+CHAVE_ADVERTENCIAS = "advertencias"
+ACOES_ADVERTENCIA = {"silenciar": "silenciado(a)", "expulsar": "expulso(a)", "banir": "banido(a)"}
 
 _mod_schemas_prontos: set[str] = set()
 
@@ -86,6 +90,19 @@ def _adv_listar(guild_id: int, user_id: int) -> list[tuple[int, int, str, float]
     )
 
 
+def _adv_contar_ativas(guild_id: int, user_id: int, desde: float) -> int:
+    return sqlitestore.consultar_um(
+        _mod_conectar_bd,
+        "SELECT COUNT(*) FROM advertencias WHERE guild_id = ? AND user_id = ? AND criado_em >= ?",
+        (guild_id, user_id, desde),
+    )[0]
+
+
+def _adv_inicio_validade(config: dict | None) -> float:
+    dias = (config or {}).get("validade_dias") or 0
+    return time.time() - dias * 86400 if dias else 0.0
+
+
 def _adv_limpar(guild_id: int, user_id: int) -> int:
     return sqlitestore.executar_retornando_rowcount(
         _mod_conectar_bd, "DELETE FROM advertencias WHERE guild_id = ? AND user_id = ?", (guild_id, user_id)
@@ -119,7 +136,9 @@ def _cortar(texto: str, limite: int = 1000) -> str:
     return texto if len(texto) <= limite else texto[: limite - 3] + "..."
 
 
-async def enviar_log(guild: discord.Guild, titulo: str, descricao: str, cor: discord.Color) -> bool:
+async def enviar_log(
+    guild: discord.Guild, titulo: str, descricao: str, cor: discord.Color, arquivo: discord.File | None = None
+) -> bool:
     """Manda um aviso no canal de logs do servidor, se houver um configurado.
     Devolve False se nao ha canal (ou o bot nao consegue escrever nele)."""
     canal_id = await asyncio.to_thread(_logs_canal, guild.id)
@@ -128,7 +147,7 @@ async def enviar_log(guild: discord.Guild, titulo: str, descricao: str, cor: dis
         return False
     embed = discord.Embed(title=titulo, description=descricao, color=cor, timestamp=discord.utils.utcnow())
     try:
-        await canal.send(embed=embed)
+        await canal.send(embed=embed, file=arquivo or discord.utils.MISSING)
     except discord.HTTPException as erro:
         logger.warning(f"Nao consegui escrever no canal de logs de {guild.id}: {erro}")
         return False
@@ -546,18 +565,54 @@ class Moderacao(commands.Cog):
             await interaction.response.send_message("Bots nao recebem advertencia.", ephemeral=True)
             return
         await interaction.response.defer()
-        total = await asyncio.to_thread(_adv_adicionar, interaction.guild.id, membro.id, interaction.user.id, motivo)
+        await asyncio.to_thread(_adv_adicionar, interaction.guild.id, membro.id, interaction.user.id, motivo)
+        config = await asyncio.to_thread(configstore.obter, interaction.guild.id, CHAVE_ADVERTENCIAS)
+        ativas = await asyncio.to_thread(
+            _adv_contar_ativas, interaction.guild.id, membro.id, _adv_inicio_validade(config)
+        )
         await _avisar_por_dm(
-            membro, f"Voce recebeu uma advertencia em **{interaction.guild.name}**: {motivo}\nTotal: {total}."
+            membro, f"Voce recebeu uma advertencia em **{interaction.guild.name}**: {motivo}\nAdvertencias ativas: {ativas}."
         )
         await enviar_log(
             interaction.guild,
             "Advertencia",
             f"**Membro:** {membro.mention}\n**Moderador:** {interaction.user.mention}\n"
-            f"**Motivo:** {motivo}\n**Total de advertencias:** {total}",
+            f"**Motivo:** {motivo}\n**Advertencias ativas:** {ativas}",
             discord.Color.yellow(),
         )
-        await interaction.followup.send(f"{membro.mention} advertido(a) ({total} no total). Motivo: {motivo}")
+        texto = f"{membro.mention} advertido(a) ({ativas} ativa(s)). Motivo: {motivo}"
+
+        limite = (config or {}).get("limite") or 0
+        if limite and ativas >= limite:
+            punicao = await self._punir_por_advertencias(interaction, membro, config, ativas)
+            if punicao:
+                texto += f"\nAtingiu {ativas} advertencias e foi {punicao}."
+        await interaction.followup.send(texto)
+
+    async def _punir_por_advertencias(
+        self, interaction: discord.Interaction, membro: discord.Member, config: dict, ativas: int
+    ) -> str | None:
+        acao = config.get("acao", "silenciar")
+        guild = interaction.guild
+        # Mesma regra de hierarquia dos comandos - aqui nao da pra responder
+        # com o aviso, entao so nao pune.
+        if membro.top_role >= guild.me.top_role or membro.id == guild.owner_id:
+            return None
+        motivo = f"Atingiu {ativas} advertencias (punicao automatica, por {interaction.user})"
+        try:
+            if acao == "banir":
+                await _avisar_por_dm(membro, f"Voce foi banido(a) de **{guild.name}**: {motivo}.")
+                await guild.ban(membro, reason=motivo, delete_message_seconds=0)
+            elif acao == "expulsar":
+                await _avisar_por_dm(membro, f"Voce foi expulso(a) de **{guild.name}**: {motivo}.")
+                await membro.kick(reason=motivo)
+            else:
+                minutos = config.get("duracao_min") or 60
+                await membro.timeout(datetime.timedelta(minutes=minutos), reason=motivo)
+        except discord.HTTPException as erro:
+            logger.warning(f"Punicao automatica falhou em {guild.id}: {erro}")
+            return None
+        return ACOES_ADVERTENCIA.get(acao, acao)
 
     @mod.command(name="advertencias", description="Lista as advertencias de um membro")
     @app_commands.describe(membro="De quem ver as advertencias")
@@ -568,14 +623,17 @@ class Moderacao(commands.Cog):
         if not lista:
             await interaction.response.send_message(f"{membro.mention} nao tem advertencias.", ephemeral=True)
             return
+        config = await asyncio.to_thread(configstore.obter, interaction.guild.id, CHAVE_ADVERTENCIAS)
+        inicio_validade = _adv_inicio_validade(config)
+        ativas = sum(1 for _, _, _, criado_em in lista if criado_em >= inicio_validade)
         linhas = [
             f"**{posicao}.** {discord.utils.format_dt(datetime.datetime.fromtimestamp(criado_em), 'd')} "
-            f"por <@{moderador_id}>: {motivo}"
+            f"por <@{moderador_id}>: {motivo}" + (" *(expirada)*" if criado_em < inicio_validade else "")
             for posicao, (_, moderador_id, motivo, criado_em) in enumerate(lista[-20:], start=max(1, len(lista) - 19))
         ]
         view = layout.view_estatica(
             layout.secao_com_miniatura(
-                f"## Advertencias de {membro.display_name}\nTotal: {len(lista)}", membro.display_avatar.url
+                f"## Advertencias de {membro.display_name}\nAtivas: {ativas} | Total: {len(lista)}", membro.display_avatar.url
             ),
             layout.separador(),
             layout.texto(_cortar("\n".join(linhas), 3500)),
@@ -744,25 +802,68 @@ class Moderacao(commands.Cog):
         alvo = f"<@{entrada.target.id}>" if entrada.target is not None else "?"
         autor = f"<@{entrada.user_id}>" if entrada.user_id else "?"
         motivo = entrada.reason or "Sem motivo informado"
+        guild = entrada.guild
 
         if acao is discord.AuditLogAction.ban:
-            titulo, cor = "Banido", discord.Color.dark_red()
+            titulo, cor, detalhe = "Banido", discord.Color.dark_red(), f"**Motivo:** {motivo}"
         elif acao is discord.AuditLogAction.unban:
-            titulo, cor = "Desbanido", discord.Color.green()
+            titulo, cor, detalhe = "Desbanido", discord.Color.green(), f"**Motivo:** {motivo}"
         elif acao is discord.AuditLogAction.kick:
-            titulo, cor = "Expulso", discord.Color.orange()
+            titulo, cor, detalhe = "Expulso", discord.Color.orange(), f"**Motivo:** {motivo}"
+        elif acao is discord.AuditLogAction.member_role_update:
+            adicionados = ", ".join(cargo.mention for cargo in getattr(entrada.after, "roles", []))
+            removidos = ", ".join(cargo.mention for cargo in getattr(entrada.before, "roles", []))
+            titulo, cor = "Cargos alterados", discord.Color.blurple()
+            detalhe = "\n".join(
+                parte
+                for parte in (
+                    f"**Ganhou:** {adicionados}" if adicionados else "",
+                    f"**Perdeu:** {removidos}" if removidos else "",
+                )
+                if parte
+            )
         elif acao is discord.AuditLogAction.member_update and hasattr(entrada.after, "timed_out_until"):
             ate = entrada.after.timed_out_until
             if ate is None:
-                titulo, cor = "Silencio removido", discord.Color.green()
+                titulo, cor, detalhe = "Silencio removido", discord.Color.green(), f"**Motivo:** {motivo}"
             else:
                 titulo, cor = "Silenciado", discord.Color.orange()
-                motivo += f"\n**Ate:** {discord.utils.format_dt(ate, 'f')}"
+                detalhe = f"**Motivo:** {motivo}\n**Ate:** {discord.utils.format_dt(ate, 'f')}"
+        elif acao is discord.AuditLogAction.member_update and hasattr(entrada.after, "nick"):
+            titulo, cor = "Apelido alterado", discord.Color.blurple()
+            detalhe = f"**Antes:** {getattr(entrada.before, 'nick', None) or '(nenhum)'}\n**Depois:** {entrada.after.nick or '(nenhum)'}"
         else:
             return
 
+        await enviar_log(guild, titulo, f"**Membro:** {alvo}\n**Por:** {autor}\n{detalhe}", cor)
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, membro: discord.Member, antes: discord.VoiceState, depois: discord.VoiceState):
+        if membro.bot or antes.channel == depois.channel:
+            return
+        if antes.channel is None:
+            titulo, texto, cor = "Entrou na call", f"{membro.mention} entrou em {depois.channel.mention}", discord.Color.green()
+        elif depois.channel is None:
+            titulo, texto, cor = "Saiu da call", f"{membro.mention} saiu de {antes.channel.mention}", discord.Color.dark_grey()
+        else:
+            titulo = "Trocou de call"
+            texto = f"{membro.mention}: {antes.channel.mention} → {depois.channel.mention}"
+            cor = discord.Color.blurple()
+        await enviar_log(membro.guild, titulo, texto, cor)
+
+    @commands.Cog.listener()
+    async def on_invite_create(self, convite: discord.Invite):
+        if convite.guild is None or not isinstance(convite.guild, discord.Guild):
+            return
+        usos = convite.max_uses or "ilimitados"
+        expira = discord.utils.format_dt(convite.expires_at, "R") if convite.expires_at else "nunca"
+        criador = convite.inviter.mention if convite.inviter else "?"
         await enviar_log(
-            entrada.guild, titulo, f"**Membro:** {alvo}\n**Por:** {autor}\n**Motivo:** {motivo}", cor
+            convite.guild,
+            "Convite criado",
+            f"**Codigo:** `{convite.code}`\n**Por:** {criador}\n**Canal:** {convite.channel.mention}\n"
+            f"**Usos:** {usos} | **Expira:** {expira}",
+            discord.Color.teal(),
         )
 
 

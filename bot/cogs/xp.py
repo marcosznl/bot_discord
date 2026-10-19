@@ -7,9 +7,9 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
-from bot import layout, sqlitestore
+from bot import configstore, layout, sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_manage_guild
 from bot.retry_ui import LayoutViewComRetry, ModalComRetry, ViewComRetry
@@ -20,6 +20,9 @@ XP_DB_PATH = os.path.join(DATA_DIR, "xp.db")
 XP_COOLDOWN_SEGUNDOS = 20
 XP_MIN_POR_MENSAGEM = 15
 XP_MAX_POR_MENSAGEM = 25
+XP_VOZ_POR_MINUTO = 5
+# Liga/desliga o XP por tempo em call (padrao: ligado).
+CHAVE_XP_VOZ = "xp_voz"
 
 _xp_cooldowns: dict[tuple[int, int], float] = {}
 
@@ -460,7 +463,9 @@ async def _xp_acao_ajuda(interaction: discord.Interaction) -> None:
         layout.texto(
             "**Como ganhar XP**\n"
             f"Voce ganha entre {XP_MIN_POR_MENSAGEM} e {XP_MAX_POR_MENSAGEM} XP a cada mensagem enviada, "
-            f"com um intervalo minimo de {XP_COOLDOWN_SEGUNDOS} segundos entre mensagens que contam."
+            f"com um intervalo minimo de {XP_COOLDOWN_SEGUNDOS} segundos entre mensagens que contam. "
+            f"Em call com pelo menos mais uma pessoa, voce ganha {XP_VOZ_POR_MINUTO} XP por minuto "
+            "(sem contar quem esta com o fone desligado ou no canal AFK)."
         ),
         layout.texto(
             "**Subindo de nivel**\n"
@@ -502,37 +507,72 @@ class XP(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
+    async def cog_load(self) -> None:
+        self.xp_por_voz.start()
+
+    async def cog_unload(self) -> None:
+        self.xp_por_voz.cancel()
+
+    async def _dar_xp(self, membro: discord.Member, ganho: int, canal_aviso: discord.abc.Messageable) -> None:
+        xp_antes, xp_depois = await asyncio.to_thread(_xp_adicionar, membro.guild.id, membro.id, ganho)
+        nivel_antes = _xp_calcular_nivel(xp_antes)
+        nivel_depois = _xp_calcular_nivel(xp_depois)
+        if nivel_depois <= nivel_antes:
             return
 
-        if message.guild is not None and await asyncio.to_thread(_xp_ativo, message.guild.id):
-            chave = (message.guild.id, message.author.id)
-            agora = time.time()
-            if agora - _xp_cooldowns.get(chave, 0) >= XP_COOLDOWN_SEGUNDOS:
-                _xp_cooldowns[chave] = agora
+        try:
+            await canal_aviso.send(f"{membro.mention} subiu para o nivel **{nivel_depois}**!")
+        except discord.HTTPException:
+            pass  # sem permissao no canal - o nivel sobe do mesmo jeito
 
-                ganho = random.randint(XP_MIN_POR_MENSAGEM, XP_MAX_POR_MENSAGEM)
-                xp_antes, xp_depois = await asyncio.to_thread(
-                    _xp_adicionar, message.guild.id, message.author.id, ganho
-                )
+        cargo_id = await asyncio.to_thread(_xp_cargo_do_nivel, membro.guild.id, nivel_depois)
+        if cargo_id:
+            cargo = membro.guild.get_role(cargo_id)
+            if cargo is None:
+                logger.warning(f"Cargo {cargo_id} do nivel {nivel_depois} nao foi encontrado no servidor.")
+            else:
+                try:
+                    await membro.add_roles(cargo)
+                except discord.Forbidden:
+                    logger.warning(f"Sem permissao para dar o cargo '{cargo.name}' (nivel {nivel_depois}).")
 
-                nivel_antes = _xp_calcular_nivel(xp_antes)
-                nivel_depois = _xp_calcular_nivel(xp_depois)
-                if nivel_depois > nivel_antes:
-                    await message.channel.send(f"{message.author.mention} subiu para o nivel **{nivel_depois}**!")
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or message.guild is None:
+            return
+        if not await asyncio.to_thread(_xp_ativo, message.guild.id):
+            return
+        chave = (message.guild.id, message.author.id)
+        agora = time.time()
+        if agora - _xp_cooldowns.get(chave, 0) < XP_COOLDOWN_SEGUNDOS:
+            return
+        _xp_cooldowns[chave] = agora
+        await self._dar_xp(message.author, random.randint(XP_MIN_POR_MENSAGEM, XP_MAX_POR_MENSAGEM), message.channel)
 
-                    cargo_id = await asyncio.to_thread(_xp_cargo_do_nivel, message.guild.id, nivel_depois)
-                    if cargo_id:
-                        cargo = message.guild.get_role(cargo_id)
-                        if cargo is None:
-                            logger.warning(f"Cargo {cargo_id} do nivel {nivel_depois} nao foi encontrado no servidor.")
-                        else:
-                            try:
-                                await message.author.add_roles(cargo)
-                            except discord.Forbidden:
-                                logger.warning(f"Sem permissao para dar o cargo '{cargo.name}' (nivel {nivel_depois}).")
+    @tasks.loop(minutes=1)
+    async def xp_por_voz(self):
+        for guild in self.bot.guilds:
+            if not await asyncio.to_thread(_xp_ativo, guild.id):
+                continue
+            if not await asyncio.to_thread(configstore.obter, guild.id, CHAVE_XP_VOZ, True):
+                continue
+            for canal in [*guild.voice_channels, *guild.stage_channels]:
+                if canal == guild.afk_channel:
+                    continue
+                ouvindo = [
+                    membro
+                    for membro in canal.members
+                    if not membro.bot and membro.voice and not (membro.voice.self_deaf or membro.voice.deaf)
+                ]
+                # Sozinho na call nao conta - senao era so deixar o PC ligado.
+                if len(ouvindo) < 2:
+                    continue
+                for membro in ouvindo:
+                    await self._dar_xp(membro, XP_VOZ_POR_MINUTO, canal)
+
+    @xp_por_voz.before_loop
+    async def _antes_voz(self):
+        await self.bot.wait_until_ready()
 
     @app_commands.command(name="xp", description="Ve seu rank, o leaderboard do servidor ou configura o sistema de XP")
     @app_commands.guild_only()

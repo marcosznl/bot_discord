@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import discord
 import yt_dlp
@@ -9,6 +10,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot import layout
+from bot.config import DATA_DIR
+from bot.jsonstore import escrever_json, ler_json
 from bot.retry_ui import LayoutViewComRetry, ModalComRetry
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,31 @@ class Faixa:
 _filas_musica: dict[int, list[Faixa]] = {}
 _historico_musica: dict[int, list[Faixa]] = {}
 _inicio_faixa: dict[int, float] = {}
+_canal_voz: dict[int, int] = {}
+
+# Fila salva em disco para continuar tocando depois que o bot reinicia.
+FILA_PATH = os.path.join(DATA_DIR, "musica_fila.json")
+
+
+def _salvar_filas() -> None:
+    # Chamado tanto do event loop quanto da thread do player (callback do
+    # ffmpeg) - escrever_json troca o arquivo de forma atomica.
+    dados = {
+        str(guild_id): {"canal_voz": _canal_voz[guild_id], "fila": [asdict(faixa) for faixa in fila]}
+        for guild_id, fila in list(_filas_musica.items())
+        if fila and guild_id in _canal_voz
+    }
+    try:
+        escrever_json(FILA_PATH, dados)
+    except OSError as erro:
+        logger.warning(f"Nao consegui salvar a fila de musica: {erro}")
+
+
+def _carregar_filas() -> dict[int, tuple[int, list[Faixa]]]:
+    return {
+        int(guild_id): (dados["canal_voz"], [Faixa(**faixa) for faixa in dados["fila"]])
+        for guild_id, dados in ler_json(FILA_PATH).items()
+    }
 _pular_avanco_historico: dict[int, bool] = {}
 _ocioso_desde: dict[int, float] = {}
 _locks_musica: dict[int, asyncio.Lock] = {}
@@ -99,6 +127,7 @@ def _tocar_proximo(guild_id: int, voice_client: discord.VoiceClient, tentativas:
     except Exception as erro:
         logger.error(f"Erro ao extrair musica '{titulo}': {erro}")
         fila.pop(0)
+        _salvar_filas()
         _tocar_proximo(guild_id, voice_client)
         return
 
@@ -128,6 +157,7 @@ def _tocar_proximo(guild_id: int, voice_client: discord.VoiceClient, tentativas:
             historico = _historico_musica.setdefault(guild_id, [])
             historico.append(tocada)
             del historico[:-20]
+        _salvar_filas()
         _tocar_proximo(guild_id, voice_client)
 
     voice_client.play(fonte, after=_apos_tocar)
@@ -146,6 +176,7 @@ async def _musica_acao_tocar(interaction: discord.Interaction, busca: str) -> No
         voice_client = await canal_voz.connect()
     elif voice_client.channel != canal_voz:
         await voice_client.move_to(canal_voz)
+    _canal_voz[interaction.guild.id] = canal_voz.id
 
     try:
         faixa, _, _ = await asyncio.to_thread(_ytdlp_buscar, busca)
@@ -161,6 +192,7 @@ async def _musica_acao_tocar(interaction: discord.Interaction, busca: str) -> No
     async with _lock_musica(interaction.guild.id):
         fila = _filas_musica.setdefault(interaction.guild.id, [])
         fila.append(faixa)
+        _salvar_filas()
 
         if not voice_client.is_playing() and not voice_client.is_paused():
             await asyncio.to_thread(_tocar_proximo, interaction.guild.id, voice_client)
@@ -194,6 +226,7 @@ async def _musica_acao_anterior(interaction: discord.Interaction) -> None:
     anterior = historico.pop()
     fila = _filas_musica.setdefault(guild_id, [])
     fila.insert(0, anterior)
+    _salvar_filas()
 
     await interaction.response.send_message(f"Voltando para: {anterior.titulo} ({_formatar_duracao_musica(anterior.duracao)})")
 
@@ -212,6 +245,7 @@ async def _musica_acao_parar(interaction: discord.Interaction) -> None:
 
     _filas_musica.pop(interaction.guild.id, None)
     _historico_musica.pop(interaction.guild.id, None)
+    _salvar_filas()
     await voice_client.disconnect()
     await interaction.response.send_message("Parado e saindo do canal de voz.")
 
@@ -225,6 +259,7 @@ async def _musica_acao_limpar_fila(interaction: discord.Interaction) -> None:
         return
 
     _filas_musica[interaction.guild.id] = fila[:1]
+    _salvar_filas()
     await interaction.response.send_message("Fila limpa (a musica atual continua tocando).")
 
 
@@ -321,8 +356,11 @@ class PainelMusica(LayoutViewComRetry):
 
 
 class Musica(commands.Cog):
+    musica = app_commands.Group(name="musica", description="Musica no canal de voz", guild_only=True)
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._fila_restaurada = False
 
     async def cog_load(self) -> None:
         self.verificar_ocioso_voz.start()
@@ -348,15 +386,62 @@ class Musica(commands.Cog):
                 _filas_musica.pop(guild.id, None)
                 _ocioso_desde.pop(guild.id, None)
                 _inicio_faixa.pop(guild.id, None)
+                _salvar_filas()
                 await voice_client.disconnect()
 
     @verificar_ocioso_voz.before_loop
     async def _antes_ocioso(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="musica", description="Controla a reproducao de musica")
-    @app_commands.guild_only()
-    async def musica(self, interaction: discord.Interaction):
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._fila_restaurada:
+            return
+        self._fila_restaurada = True
+        for guild_id, (canal_id, fila) in (await asyncio.to_thread(_carregar_filas)).items():
+            canal = self.bot.get_channel(canal_id)
+            # So volta a tocar se ainda tiver gente no canal.
+            if canal is None or not fila or not any(not membro.bot for membro in canal.members):
+                continue
+            try:
+                voice_client = canal.guild.voice_client or await canal.connect()
+            except (discord.HTTPException, asyncio.TimeoutError, discord.ClientException) as erro:
+                logger.warning(f"Nao consegui voltar ao canal de voz {canal_id}: {erro}")
+                continue
+            _filas_musica[guild_id] = fila
+            _canal_voz[guild_id] = canal_id
+            if not voice_client.is_playing():
+                await asyncio.to_thread(_tocar_proximo, guild_id, voice_client)
+            logger.info(f"Fila de musica restaurada em {guild_id} ({len(fila)} faixa(s))")
+        await asyncio.to_thread(_salvar_filas)
+
+    @musica.command(name="tocar", description="Toca uma musica (ou poe na fila) - link do YouTube ou busca")
+    @app_commands.describe(busca="Link do YouTube ou o nome da musica")
+    async def tocar(self, interaction: discord.Interaction, busca: app_commands.Range[str, 1, 200]):
+        await _musica_acao_tocar(interaction, busca)
+
+    @musica.command(name="pular", description="Pula para a proxima musica da fila")
+    async def pular(self, interaction: discord.Interaction):
+        await _musica_acao_pular(interaction)
+
+    @musica.command(name="anterior", description="Volta para a musica anterior")
+    async def anterior(self, interaction: discord.Interaction):
+        await _musica_acao_anterior(interaction)
+
+    @musica.command(name="parar", description="Para a musica, limpa a fila e sai do canal de voz")
+    async def parar(self, interaction: discord.Interaction):
+        await _musica_acao_parar(interaction)
+
+    @musica.command(name="fila", description="Mostra a fila de musicas")
+    async def fila(self, interaction: discord.Interaction):
+        await _musica_acao_fila(interaction)
+
+    @musica.command(name="limpar", description="Limpa a fila (a musica atual continua tocando)")
+    async def limpar(self, interaction: discord.Interaction):
+        await _musica_acao_limpar_fila(interaction)
+
+    @musica.command(name="painel", description="Abre o painel com o que esta tocando e os botoes de controle")
+    async def painel(self, interaction: discord.Interaction):
         await interaction.response.send_message(view=PainelMusica(interaction.guild), ephemeral=True)
 
 
