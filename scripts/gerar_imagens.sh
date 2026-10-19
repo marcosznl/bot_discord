@@ -18,4 +18,5 @@ for nome in tocar pular anterior parar fila atualizar sorteio verificado; do
     renderizar "emoji.html?nome=$nome" "$RAIZ/assets/emojis/$nome.png" 128 128
 done
 renderizar "icone.html" "$RAIZ/docs/icone.png" 512 512
+renderizar "avatar.html" "$RAIZ/docs/avatar.png" 1024 1024
 renderizar "capa.html" "$RAIZ/docs/previa-social.png" 1280 640

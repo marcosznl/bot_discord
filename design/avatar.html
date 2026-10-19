@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Avatar do bot no Discord (1024x1024) -> docs/avatar.png. Diferente do
+     icone do README: quadrado cheio, sem cantos nem sombra, porque o Discord
+     recorta o avatar em circulo - o desenho fica dentro desse circulo. -->
+<style>
+  html, body { margin: 0; }
+  svg { display: block; width: 1024px; height: 1024px; }
+</style>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fundo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B7BFF"/>
+      <stop offset="1" stop-color="#4632D9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#fundo)"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M136 330 A120 120 0 0 1 376 330" stroke="#fff" stroke-width="38"/>
+    <path d="M188 330 A68 68 0 0 1 324 330" stroke="#fff" stroke-opacity=".55" stroke-width="30"/>
+  </g>
+  <path d="M362 148 L373 176 L401 187 L373 198 L362 226 L351 198 L323 187 L351 176 Z" fill="#fff"/>
+</svg>
