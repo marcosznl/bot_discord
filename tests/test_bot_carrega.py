@@ -16,8 +16,12 @@ def bot_carregado(monkeypatch):
     async def sem_rede(_client):
         pass
 
-    # Subir os emojis do bot precisa de login no Discord.
+    async def app_com_intents():
+        return SimpleNamespace(flags=discord.ApplicationFlags(gateway_guild_members=True, gateway_message_content=True))
+
+    # Subir os emojis e consultar a aplicacao precisam de login no Discord.
     monkeypatch.setattr(main.emojis, "sincronizar", sem_rede)
+    monkeypatch.setattr(main.bot, "application_info", app_com_intents)
 
     async def montar():
         await main.bot._async_setup_hook()
@@ -186,3 +190,13 @@ def test_modal_de_anuncio(bot_carregado):
     modal, view = loop.run_until_complete(montar())
     assert len(modal.to_components()) == 4
     assert view.to_components()
+
+
+def test_intents_faltando():
+    import main
+
+    tudo = discord.ApplicationFlags(gateway_guild_members=True, gateway_message_content=True)
+    limitado = discord.ApplicationFlags(gateway_guild_members_limited=True, gateway_message_content_limited=True)
+    assert main.intents_faltando(tudo) == []
+    assert main.intents_faltando(limitado) == []
+    assert main.intents_faltando(discord.ApplicationFlags()) == ["Server Members Intent", "Message Content Intent"]

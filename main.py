@@ -45,8 +45,27 @@ EXTENSOES = [
 ]
 
 
+def intents_faltando(flags: discord.ApplicationFlags) -> list[str]:
+    """Intents privilegiados que o bot usa mas que estao desligados no
+    Developer Portal."""
+    faltando = []
+    if not (flags.gateway_guild_members or flags.gateway_guild_members_limited):
+        faltando.append("Server Members Intent")
+    if not (flags.gateway_message_content or flags.gateway_message_content_limited):
+        faltando.append("Message Content Intent")
+    return faltando
+
+
 class ArcoBot(commands.Bot):
     async def setup_hook(self) -> None:
+        # Sem os intents ligados no portal, o Discord derruba a conexao com
+        # 4014 e o discord.py as vezes fica tentando reconectar em loop.
+        # Conferir antes deixa o erro claro e para o bot na hora.
+        faltando = intents_faltando((await self.application_info()).flags)
+        if faltando:
+            logger.error(f"Ligue no Developer Portal > Bot > Privileged Gateway Intents (e salve): {', '.join(faltando)}")
+            raise discord.PrivilegedIntentsRequired(None)
+
         await self.tree.set_translator(TradutorIngles())
         await emojis.sincronizar(self)
         for extensao in EXTENSOES:
