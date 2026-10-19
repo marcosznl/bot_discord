@@ -266,36 +266,6 @@ class Voz(commands.Cog):
         return opcoes[:25]
 
 
-    @som.command(name="adicionar", description="Adiciona um som ao soundboard do servidor")
-    @app_commands.describe(
-        nome="Nome do som",
-        audio="MP3 ou OGG de ate 512 KB e 5,2 segundos",
-        emoji="Emoji do som (opcional)",
-        volume="Volume de 1 a 100 (padrao 100)",
-    )
-    async def som_adicionar(
-        self,
-        interaction: discord.Interaction,
-        nome: app_commands.Range[str, 2, 32],
-        audio: discord.Attachment,
-        emoji: str | None = None,
-        volume: app_commands.Range[int, 1, 100] = 100,
-    ):
-        if not await requer_permissao(interaction, "create_expressions", "esse comando"):
-            return
-        if audio.content_type not in ("audio/mpeg", "audio/ogg") or audio.size > 512 * 1024:
-            await interaction.response.send_message("Envie um MP3 ou OGG de ate 512 KB.", ephemeral=True)
-            return
-        await interaction.response.defer()
-        criado = await interaction.guild.create_soundboard_sound(
-            name=nome,
-            sound=await audio.read(),
-            volume=volume / 100,
-            emoji=emoji.strip() if emoji else None,
-            reason=f"Adicionado por {interaction.user}",
-        )
-        await interaction.followup.send(f"🔊 Som **{criado.name}** adicionado. Toque com `/som tocar`.")
-
     # ---- palcos
 
     @palco.command(name="abrir", description="Abre um palco com um tema")

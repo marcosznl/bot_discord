@@ -76,7 +76,10 @@ def test_paineis_serializam(bot_carregado):
     async def montar():
         guild_sem_voz = SimpleNamespace(id=1, voice_client=None)
         return [
-            *(PainelAjuda(bot, categoria) for categoria in [*COMANDOS_CATEGORIAS, "Clique direito"]),
+            *(
+                PainelAjuda(bot, discord.Permissions.all(), True, categoria)
+                for categoria in [*COMANDOS_CATEGORIAS, "Clique direito"]
+            ),
             BotoesXP(),
             PainelMusica(guild_sem_voz),
             PainelAutoMod(bot, {}),
@@ -200,3 +203,65 @@ def test_intents_faltando():
     assert main.intents_faltando(tudo) == []
     assert main.intents_faltando(limitado) == []
     assert main.intents_faltando(discord.ApplicationFlags()) == ["Server Members Intent", "Message Content Intent"]
+
+
+def _texto_do_painel(view) -> str:
+    return "\n".join(item.content for item in view.walk_children() if isinstance(item, discord.ui.TextDisplay))
+
+
+def _categorias(view) -> dict[str, str | None]:
+    seletor = next(item for item in view.walk_children() if isinstance(item, discord.ui.Select))
+    return {opcao.label: opcao.description for opcao in seletor.options}
+
+
+def test_ajuda_de_membro_comum_esconde_a_moderacao(bot_carregado):
+    from bot.cogs.geral import PainelAjuda
+
+    bot, loop = bot_carregado
+    membro = discord.Permissions(send_messages=True, view_channel=True, connect=True)
+
+    async def montar():
+        return [PainelAjuda(bot, membro, True, categoria) for categoria in ("Geral", "Comunidade", "Moderacao")]
+
+    geral, comunidade, pedido_moderacao = loop.run_until_complete(montar())
+    categorias = _categorias(geral)
+    assert "Moderacao" not in categorias and "Servidor" not in categorias
+    assert all(descricao is None for descricao in categorias.values())  # nada marcado como "so para a equipe"
+    texto = _texto_do_painel(comunidade)
+    assert "/enquete" in texto and "/sugerir" in texto
+    assert "/sorteio" not in texto and "/anuncio" not in texto and "🔒" not in texto
+    # Nenhum comando que exige permissao aparece para o membro comum.
+    tudo = "\n".join(_texto_do_painel(PainelAjuda(bot, membro, True, c)) for c in _categorias(geral))
+    assert "/emoji" not in tudo and "/som adicionar" not in tudo and "/mod" not in tudo
+    # Pedir uma categoria escondida cai na primeira disponivel.
+    assert "### 📌 Geral" in _texto_do_painel(pedido_moderacao)
+
+
+def test_ajuda_da_moderacao_mostra_tudo_marcado(bot_carregado):
+    from bot.cogs.geral import PainelAjuda
+
+    bot, loop = bot_carregado
+
+    async def montar():
+        return PainelAjuda(bot, discord.Permissions.all(), True, "Moderacao"), PainelAjuda(bot, discord.Permissions.all(), True, "Comunidade")
+
+    moderacao, comunidade = loop.run_until_complete(montar())
+    assert _categorias(moderacao)["Moderacao"] == "So para a equipe"
+    assert _categorias(moderacao)["Comunidade"] is None  # categoria mista
+    assert "so para a equipe" in _texto_do_painel(moderacao)
+    texto = _texto_do_painel(comunidade)
+    assert "🔒 `/sorteio criar`" in texto and "`/enquete`" in texto and "🔒 `/enquete`" not in texto
+
+
+def test_ajuda_fora_do_servidor_so_comandos_de_usuario(bot_carregado):
+    from bot.cogs.geral import PainelAjuda
+
+    bot, loop = bot_carregado
+
+    async def montar():
+        return PainelAjuda(bot, discord.Permissions.all(), False)
+
+    painel = loop.run_until_complete(montar())
+    texto = _texto_do_painel(painel)
+    assert "/ping" in texto and "/ajuda" in texto and "/servidor" not in texto
+    assert set(_categorias(painel)) <= {"Geral", "Comunidade", "Niveis e jogos", "Clique direito"}

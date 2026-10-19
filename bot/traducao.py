@@ -36,7 +36,7 @@ NOMES = {
 }
 
 DESCRICOES = {
-    "Mostra todos os comandos do bot, por categoria": "Shows every bot command, by category",
+    "Mostra os comandos do bot que voce pode usar, por categoria": "Shows the bot commands you can use, by category",
     "Testa se o bot esta online e mostra a latencia": "Checks if the bot is online and shows the latency",
     "Mostra o perfil de alguem (ou o seu)": "Shows someone's profile (or yours)",
     "Mostra o avatar de alguem em tamanho grande": "Shows someone's avatar in full size",
@@ -106,7 +106,7 @@ DESCRICOES = {
     "Ve seu rank, o leaderboard do servidor ou configura o sistema de XP": "Your rank, the leaderboard and XP settings",
     "Interage com alguem usando um gif de anime": "Interacts with someone using an anime gif",
     "Busca um gif pela palavra-chave": "Searches for a gif",
-    "Adiciona emojis e figurinhas ao servidor": "Adds emojis and stickers to the server",
+    "Adiciona emojis, figurinhas e sons ao servidor": "Adds emojis, stickers and sounds to the server",
     "Cria um emoji a partir de uma imagem": "Creates an emoji from an image",
     "Copia um emoji de outro servidor (cole o emoji aqui)": "Copies an emoji from another server (paste it here)",
     "Cria uma figurinha a partir de uma imagem": "Creates a sticker from an image",

@@ -28,7 +28,7 @@ Só usa slash commands e menus de clique direito, e os painéis usam o layout no
 | Comando | O que faz |
 | --- | --- |
 | `/ping` | Mostra se o bot está online e a latência |
-| `/ajuda` | Lista os comandos, com um menu para escolher a categoria |
+| `/ajuda` | Lista os comandos que **você** pode usar, com um menu para escolher a categoria. Membros comuns não veem os comandos de moderação e administração; a equipe vê tudo, com 🔒 nos restritos |
 | `/usuario [usuario]` | Cartão de perfil: datas de criação e entrada, cargos, banner |
 | `/avatar [usuario]` | Avatar em tamanho grande (com o do servidor, se houver) e links para baixar |
 | `/servidor` | Informações do servidor: dono, membros, canais, impulsos, banner |
@@ -86,7 +86,7 @@ Hierarquia: ninguém consegue moderar alguém com cargo igual ou acima do seu (o
 | `/musica pular` / `anterior` / `parar` | Controles da reprodução |
 | `/musica fila` / `limpar` | Ver ou limpar a fila |
 | `/musica painel` | Painel "tocando agora" com capa, barra de progresso, próximas da fila e todos os controles em botões |
-| `/som tocar` / `adicionar` | Toca um som do soundboard (do servidor ou padrão do Discord) na sua call, ou adiciona um novo |
+| `/som tocar` | Toca um som do soundboard (do servidor ou padrão do Discord) na sua call |
 | `/sala renomear` / `limite` / `trancar` / `destrancar` / `expulsar` / `transferir` | Controles da sua sala de voz temporária |
 | `/palco abrir` / `fechar` / `palestrante` / `plateia` | Abre um palco com tema e organiza quem fala |
 
@@ -125,7 +125,7 @@ Também tem o **jogo de contagem** (cada pessoa manda o próximo número; errou,
 | `/configurar tela_boas_vindas` | Tela de boas-vindas do Discord, com até 3 canais recomendados (servidores da Comunidade) |
 | `/configurar integracao_pergunta` | Adiciona uma pergunta de cargos à integração inicial do Discord (servidores da Comunidade) |
 | `/boasvindas` | Canal e texto de boas-vindas para novos membros |
-| `/emoji adicionar` / `copiar` / `figurinha` | Cria emoji a partir de imagem, copia emoji de outro servidor ou cria figurinha |
+| `/emoji adicionar` / `copiar` / `figurinha` / `som` | Cria emoji a partir de imagem, copia emoji de outro servidor, cria figurinha ou adiciona um som ao soundboard |
 | `/cargo_visual` | Muda cor (com degradê), ícone ou emoji de um cargo, nos servidores que têm esses recursos |
 
 Para desligar um recurso, use o `/configurar` dele sem escolher canal.
