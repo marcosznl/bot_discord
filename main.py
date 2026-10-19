@@ -6,12 +6,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot import emojis, layout
+from bot import efemeras, emojis, layout
 from bot.config import BASE_DIR, TOKEN
 from bot.traducao import TradutorIngles
 from bot.retry_ui import interacao_expirou, oferecer_tentar_de_novo
 
 logger = logging.getLogger(__name__)
+
+# Respostas privadas somem sozinhas (15 s confirmacoes, 10 min paineis).
+efemeras.instalar()
 
 intents = discord.Intents.default()
 intents.members = True  # boas-vindas, logs de entrada/saida, XP em call, aniversarios

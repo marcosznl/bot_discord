@@ -20,7 +20,7 @@
   <a href="#dados-e-backup">Dados e backup</a>
 </p>
 
-Só usa slash commands e menus de clique direito, e os painéis usam o layout novo do Discord (Components V2). Os botões de painel (cargos, tickets, sorteios, sugestões, verificação, candidaturas, retribuir) continuam funcionando depois que o bot reinicia. Quem usa o Discord em inglês vê os comandos em inglês.
+Só usa slash commands e menus de clique direito, e os painéis usam o layout novo do Discord (Components V2). As respostas privadas ("Só você pode ver isso") somem sozinhas: confirmações e avisos em 15 segundos, painéis e arquivos em 10 minutos. Os botões de painel (cargos, tickets, sorteios, sugestões, verificação, candidaturas, retribuir) continuam funcionando depois que o bot reinicia. Quem usa o Discord em inglês vê os comandos em inglês.
 
 ## Comandos
 
