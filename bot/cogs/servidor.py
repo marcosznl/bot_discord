@@ -7,7 +7,7 @@ from discord.ext import commands
 
 from bot import configstore
 from bot.permissions import requer_manage_guild, requer_permissao
-from bot.retry_ui import ViewComRetry
+from bot.retry_ui import ViewDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def nome_da_thread(texto: str, autor: str) -> str:
     return (primeira_linha or f"Conversa de {autor}")[:90]
 
 
-class EscolherCargosPergunta(ViewComRetry):
+class EscolherCargosPergunta(ViewDoBot):
     """Depois do /configurar integracao_pergunta: escolhe os cargos que viram
     as opcoes da pergunta na integracao inicial do Discord."""
 

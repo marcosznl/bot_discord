@@ -52,42 +52,46 @@ async def oferecer_tentar_de_novo(interaction: discord.Interaction, retomar: Ret
     if interaction.channel is None:
         return
     view = TentarNovamente(retomar, interaction.user.id)
-    view.mensagem = await interaction.channel.send(
-        f"{interaction.user.mention} a interacao expirou antes de eu conseguir responder{alvo} "
-        "(o Discord so espera 3s pela primeira resposta).",
-        view=view,
-    )
+    try:
+        view.mensagem = await interaction.channel.send(
+            f"{interaction.user.mention} a interacao expirou antes de eu conseguir responder{alvo} "
+            "(o Discord so espera 3s pela primeira resposta).",
+            view=view,
+        )
+    except discord.HTTPException as erro:
+        # Canal onde o bot nao pode escrever (ou instalacao de usuario).
+        logger.warning(f"Nao consegui oferecer 'Tentar de novo' em {interaction.channel_id}: {erro}")
 
 
-class _RetryMixin:
-    """Quando um clique expira antes do bot responder, oferece um botao pra
-    tentar de novo em vez de so ignorar a excecao (comportamento padrao do
-    discord.py)."""
+class _ExpiracaoMixin:
+    """Quando um clique ou formulario expira antes do bot responder, so
+    registra no log. Diferente dos comandos, aqui nao da pra reexecutar: o
+    callback responderia editando a mensagem errada (a do aviso, nao a do
+    painel). O painel continua funcionando - basta clicar de novo."""
 
     async def on_error(
         self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item
     ) -> None:
-        if not interacao_expirou(error, interaction):
-            logger.error(f"Ignorando excecao na view {self!r} para o item {item!r}", exc_info=error)
+        if interacao_expirou(error, interaction):
+            logger.warning(f"Clique expirou antes da resposta em {self!r} ({item!r})")
             return
-        await oferecer_tentar_de_novo(interaction, item.callback)
+        logger.error(f"Ignorando excecao na view {self!r} para o item {item!r}", exc_info=error)
 
 
-class ViewComRetry(_RetryMixin, discord.ui.View):
+class ViewDoBot(_ExpiracaoMixin, discord.ui.View):
     """Base para as Views classicas (botoes/selects soltos) do bot."""
 
 
-class LayoutViewComRetry(_RetryMixin, discord.ui.LayoutView):
+class LayoutViewDoBot(_ExpiracaoMixin, discord.ui.LayoutView):
     """Base para as Views no layout novo do Discord (Components V2:
     containers, secoes, textos e miniaturas)."""
 
 
-class ModalComRetry(discord.ui.Modal):
-    """Base para os Modals do bot - mesmo comportamento de retry das Views,
-    mas para o envio (on_submit) de um modal."""
+class ModalDoBot(discord.ui.Modal):
+    """Base para os Modals do bot - mesmo tratamento de expiracao das Views."""
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
-        if not interacao_expirou(error, interaction):
-            logger.error(f"Ignorando excecao no modal {self!r}", exc_info=error)
+        if interacao_expirou(error, interaction):
+            logger.warning(f"Formulario expirou antes da resposta em {self!r}")
             return
-        await oferecer_tentar_de_novo(interaction, self.on_submit)
+        logger.error(f"Ignorando excecao no modal {self!r}", exc_info=error)

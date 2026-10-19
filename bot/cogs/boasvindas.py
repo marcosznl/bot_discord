@@ -8,7 +8,7 @@ from discord.ext import commands
 from bot.config import BASE_DIR
 from bot.jsonstore import escrever_json, ler_json
 from bot.permissions import requer_manage_guild
-from bot.retry_ui import ModalComRetry, ViewComRetry
+from bot.retry_ui import ModalDoBot, ViewDoBot
 
 # Configuracao de boas-vindas por servidor (canal + mensagem), definida pelo
 # comando /boasvindas e guardada em BOAS_VINDAS_CONFIG_PATH - nao precisa
@@ -41,7 +41,7 @@ def _boas_vindas_desativar(guild_id: int) -> None:
     escrever_json(BOAS_VINDAS_CONFIG_PATH, dados)
 
 
-class ModalBoasVindasMensagem(ModalComRetry):
+class ModalBoasVindasMensagem(ModalDoBot):
     def __init__(self, guild_id: int, atual: str):
         super().__init__(title="Mensagem de boas-vindas")
         self.guild_id = guild_id
@@ -58,7 +58,7 @@ class ModalBoasVindasMensagem(ModalComRetry):
         await interaction.response.send_message("Mensagem de boas-vindas atualizada.", ephemeral=True)
 
 
-class BotoesBoasVindas(ViewComRetry):
+class BotoesBoasVindas(ViewDoBot):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id

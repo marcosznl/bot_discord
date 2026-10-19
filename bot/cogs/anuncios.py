@@ -13,7 +13,7 @@ from bot import banco, configstore, layout
 from bot.cogs.comunidade import interpretar_quando
 from bot.config import DATA_DIR, FUSO
 from bot.permissions import requer_permissao
-from bot.retry_ui import ModalComRetry
+from bot.retry_ui import ModalDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ def _caminho_imagem(dados: dict) -> str | None:
     return os.path.join(PASTA_IMAGENS, dados["imagem_arquivo"]) if dados.get("imagem_arquivo") else None
 
 
-class ModalAnuncio(ModalComRetry, title="Novo anuncio"):
+class ModalAnuncio(ModalDoBot, title="Novo anuncio"):
     def __init__(self, canal: discord.abc.GuildChannel, cargo: discord.Role | None, quando: datetime.datetime | None, cor: int | None):
         super().__init__(timeout=1200)
         self.canal = canal

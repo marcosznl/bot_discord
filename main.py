@@ -156,6 +156,15 @@ async def on_tree_error(interaction: discord.Interaction, error: app_commands.Ap
         logger.error("Ignorando excecao na arvore de comandos", exc_info=error)
 
 
+@bot.listen()
+async def on_interaction(interaction: discord.Interaction) -> None:
+    # O Discord so espera 3s pela primeira resposta. Se as interacoes
+    # chegarem atrasadas, o problema e a rede/maquina, nao o comando.
+    atraso = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+    if atraso > 1.5:
+        logger.warning(f"Interacao chegou com {atraso:.1f}s de atraso (o limite do Discord e 3s)")
+
+
 @bot.event
 async def on_ready():
     if bot.owner_id is None:

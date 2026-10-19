@@ -15,7 +15,7 @@ from bot import banco, layout, sqlitestore
 from bot.cogs.moderacao import enviar_log
 from bot.config import DATA_DIR, FUSO
 from bot.permissions import cargo_perigoso, motivo_cargo_invalido, requer_permissao
-from bot.retry_ui import ViewComRetry
+from bot.retry_ui import ViewDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +268,7 @@ def painel_cargos(titulo: str, descricao: str | None, cargos: list[discord.Role]
     return view
 
 
-class EscolherCargosPainel(ViewComRetry):
+class EscolherCargosPainel(ViewDoBot):
     def __init__(self, titulo: str, descricao: str | None):
         super().__init__(timeout=600)
         self.titulo = titulo

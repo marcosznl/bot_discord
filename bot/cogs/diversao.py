@@ -8,7 +8,12 @@ from discord.ext import commands
 from bot.config import GIPHY_API_KEY
 
 
+SEM_CHAVE_GIPHY = "Os gifs estao desligados: falta a `GIPHY_API_KEY` no `.env` do bot."
+
+
 async def _buscar_gif(busca: str) -> str | None:
+    if not GIPHY_API_KEY:
+        return None
     params = {"api_key": GIPHY_API_KEY, "q": busca, "limit": 25, "rating": "pg-13"}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
@@ -64,6 +69,9 @@ class Diversao(commands.Cog):
     @app_commands.checks.cooldown(3, 30, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(busca="Palavra-chave para buscar o gif")
     async def gif(self, interaction: discord.Interaction, busca: str):
+        if not GIPHY_API_KEY:
+            await interaction.response.send_message(SEM_CHAVE_GIPHY, ephemeral=True)
+            return
         await interaction.response.defer()
 
         gif_url = await _buscar_gif(busca)
@@ -88,6 +96,10 @@ async def _enviar_interacao(
     interaction: discord.Interaction, acao: str, autor: discord.abc.User, alvo: discord.abc.User
 ) -> None:
     _, busca, frase = INTERACOES[acao]
+    if not GIPHY_API_KEY:
+        enviar = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        await enviar(SEM_CHAVE_GIPHY, ephemeral=True)
+        return
     if not interaction.response.is_done():
         await interaction.response.defer()
 

@@ -14,7 +14,7 @@ from bot import layout
 from bot.emojis import emoji
 from bot.config import DATA_DIR
 from bot.jsonstore import escrever_json, ler_json
-from bot.retry_ui import LayoutViewComRetry, ModalComRetry
+from bot.retry_ui import LayoutViewDoBot, ModalDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +291,7 @@ async def _musica_acao_fila(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(view=view, ephemeral=True)
 
 
-class ModalTocarMusica(ModalComRetry, title="Tocar musica"):
+class ModalTocarMusica(ModalDoBot, title="Tocar musica"):
     busca = discord.ui.TextInput(label="Link do YouTube ou busca", max_length=200)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -302,7 +302,7 @@ async def _abrir_modal_tocar(interaction: discord.Interaction) -> None:
     await interaction.response.send_modal(ModalTocarMusica())
 
 
-class PainelMusica(LayoutViewComRetry):
+class PainelMusica(LayoutViewDoBot):
     """Painel do /musica: o que esta tocando (capa, link e progresso), as
     proximas da fila e os controles."""
 

@@ -12,7 +12,7 @@ from discord.ext import commands, tasks
 from bot import configstore, layout, sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_manage_guild
-from bot.retry_ui import LayoutViewComRetry, ModalComRetry, ViewComRetry
+from bot.retry_ui import LayoutViewDoBot, ModalDoBot, ViewDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ async def _xp_acao_leaderboard(interaction: discord.Interaction) -> None:
     await interaction.followup.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
-class ConfirmarResetXP(ViewComRetry):
+class ConfirmarResetXP(ViewDoBot):
     def __init__(self, guild_id: int, autor_id: int):
         super().__init__(timeout=30)
         self.guild_id = guild_id
@@ -291,7 +291,7 @@ async def _xp_acao_dar_remover(interaction: discord.Interaction, guild_id: int, 
     await interaction.response.send_message(texto, ephemeral=True)
 
 
-class ModalQuantidadeXP(ModalComRetry, title="Dar/remover XP"):
+class ModalQuantidadeXP(ModalDoBot, title="Dar/remover XP"):
     quantidade = discord.ui.TextInput(label="Quantidade (negativo para remover)", placeholder="100", max_length=10)
 
     def __init__(self, guild_id: int, membro: discord.Member):
@@ -309,7 +309,7 @@ class ModalQuantidadeXP(ModalComRetry, title="Dar/remover XP"):
         await _xp_acao_dar_remover(interaction, self.guild_id, self.membro, valor)
 
 
-class SelecionarUsuarioXP(ViewComRetry):
+class SelecionarUsuarioXP(ViewDoBot):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -322,7 +322,7 @@ class SelecionarUsuarioXP(ViewComRetry):
         await interaction.response.send_modal(ModalQuantidadeXP(self.guild_id, membro))
 
 
-class SelecionarCargoNivel(ViewComRetry):
+class SelecionarCargoNivel(ViewDoBot):
     def __init__(self, guild_id: int, nivel: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -339,7 +339,7 @@ class SelecionarCargoNivel(ViewComRetry):
         )
 
 
-class ModalNivelCargo(ModalComRetry, title="Cargo por nivel"):
+class ModalNivelCargo(ModalDoBot, title="Cargo por nivel"):
     nivel = discord.ui.TextInput(label="Nivel", placeholder="ex: 5", max_length=5)
 
     def __init__(self, guild_id: int):
@@ -361,7 +361,7 @@ class ModalNivelCargo(ModalComRetry, title="Cargo por nivel"):
         )
 
 
-class ModalRemoverCargoNivel(ModalComRetry, title="Remover cargo por nivel"):
+class ModalRemoverCargoNivel(ModalDoBot, title="Remover cargo por nivel"):
     nivel = discord.ui.TextInput(label="Nivel a remover", placeholder="ex: 5", max_length=5)
 
     def __init__(self, guild_id: int):
@@ -382,7 +382,7 @@ class ModalRemoverCargoNivel(ModalComRetry, title="Remover cargo por nivel"):
             )
 
 
-class BotoesCargosXP(ViewComRetry):
+class BotoesCargosXP(ViewDoBot):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -407,7 +407,7 @@ class BotoesCargosXP(ViewComRetry):
         await interaction.response.send_modal(ModalRemoverCargoNivel(self.guild_id))
 
 
-class BotoesXPConfig(ViewComRetry):
+class BotoesXPConfig(ViewDoBot):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -486,7 +486,7 @@ async def _xp_acao_ajuda(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(view=view, ephemeral=True)
 
 
-class BotoesXP(LayoutViewComRetry):
+class BotoesXP(LayoutViewDoBot):
     def __init__(self):
         super().__init__(timeout=600)
         self.add_item(

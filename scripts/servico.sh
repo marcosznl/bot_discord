@@ -28,6 +28,7 @@ instalar)
     <key>WorkingDirectory</key><string>$RAIZ</string>
     <key>EnvironmentVariables</key>
     <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+    <key>ProcessType</key><string>Interactive</string>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>30</integer>
@@ -36,13 +37,24 @@ instalar)
 </dict>
 </plist>
 PLIST
+    # O Python da Homebrew roda como um app (Python.app); em segundo plano e
+    # na bateria o macOS o coloca em App Nap, que atrasa rede e timers - e o
+    # Discord so espera 3s pela resposta de um comando.
+    defaults write org.python.python NSAppSleepDisabled -bool YES
+    # Reinstalando: o bootout volta antes do servico antigo terminar de
+    # sair, e o bootstrap falha (erro 5) se rodar cedo demais.
     launchctl bootout "$DOMINIO/$ROTULO" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+        launchctl print "$DOMINIO/$ROTULO" >/dev/null 2>&1 || break
+        sleep 0.5
+    done
     launchctl bootstrap "$DOMINIO" "$PLIST"
     echo "Servico instalado e rodando. Logs: $RAIZ/logs/"
     ;;
 remover)
     launchctl bootout "$DOMINIO/$ROTULO" 2>/dev/null || true
     rm -f "$PLIST"
+    defaults delete org.python.python NSAppSleepDisabled 2>/dev/null || true
     echo "Servico removido."
     ;;
 reiniciar)

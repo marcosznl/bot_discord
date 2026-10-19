@@ -8,7 +8,7 @@ from discord.ext import commands
 
 from bot import banco, configstore, layout
 from bot.permissions import cargo_perigoso, motivo_cargo_invalido, requer_permissao
-from bot.retry_ui import ModalComRetry
+from bot.retry_ui import ModalDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def candidatura_definir_status(candidatura_id: int, status: str) -> bool:
     ) > 0
 
 
-class ModalCandidatura(ModalComRetry, title="Candidatura para a equipe"):
+class ModalCandidatura(ModalDoBot, title="Candidatura para a equipe"):
     def __init__(self, areas: list[str]):
         super().__init__(timeout=900)
         self.area = discord.ui.Select(

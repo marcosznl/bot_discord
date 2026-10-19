@@ -13,7 +13,7 @@ from discord.ext import commands
 from bot import configstore, layout, sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_hierarquia, requer_manage_guild, requer_permissao
-from bot.retry_ui import LayoutViewComRetry, ModalComRetry, ViewComRetry
+from bot.retry_ui import LayoutViewDoBot, ModalDoBot, ViewDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ async def _avisar_por_dm(usuario: discord.abc.User, texto: str) -> None:
 # ---------------------------------------------------------------- /logs
 
 
-class BotoesLogs(ViewComRetry):
+class BotoesLogs(ViewDoBot):
     def __init__(self, guild_id: int):
         super().__init__(timeout=600)
         self.guild_id = guild_id
@@ -314,7 +314,7 @@ DESCRICOES_REGRAS = {
 }
 
 
-class ModalPalavrasProibidas(ModalComRetry, title="Palavras proibidas"):
+class ModalPalavrasProibidas(ModalDoBot, title="Palavras proibidas"):
     def __init__(self, painel: "PainelAutoMod", atuais: list[str]):
         super().__init__()
         self.painel = painel
@@ -333,7 +333,7 @@ class ModalPalavrasProibidas(ModalComRetry, title="Palavras proibidas"):
         await self.painel.atualizar(interaction)
 
 
-class PainelAutoMod(LayoutViewComRetry):
+class PainelAutoMod(LayoutViewDoBot):
     def __init__(self, bot: commands.Bot, regras: dict[str, discord.AutoModRule]):
         super().__init__(timeout=600)
         self.bot = bot
@@ -395,7 +395,7 @@ class PainelAutoMod(LayoutViewComRetry):
 # ---------------------------------------------------------------- denuncia
 
 
-class ModalDenuncia(ModalComRetry, title="Denunciar mensagem"):
+class ModalDenuncia(ModalDoBot, title="Denunciar mensagem"):
     motivo = discord.ui.TextInput(
         label="O que tem de errado nessa mensagem?", style=discord.TextStyle.paragraph, max_length=500
     )

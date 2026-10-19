@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import layout
-from bot.retry_ui import LayoutViewComRetry
+from bot.retry_ui import LayoutViewDoBot
 
 # Categorias mostradas pelo /ajuda. Atualizar aqui sempre que um comando for
 # criado, renomeado ou removido (as descricoes vem direto de cada comando;
@@ -51,7 +51,7 @@ def _texto_categoria(bot: commands.Bot, categoria: str) -> str:
     return "\n".join(linhas)
 
 
-class PainelAjuda(LayoutViewComRetry):
+class PainelAjuda(LayoutViewDoBot):
     def __init__(self, bot: commands.Bot, categoria: str = "Geral"):
         super().__init__(timeout=600)
         self.bot = bot
