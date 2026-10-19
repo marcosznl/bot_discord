@@ -12,7 +12,7 @@ from discord.ext import commands, tasks
 from bot import configstore, layout, sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_manage_guild
-from bot.retry_ui import LayoutViewDoBot, ModalDoBot, ViewDoBot
+from bot.retry_ui import ModalDoBot, ViewDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -486,21 +486,30 @@ async def _xp_acao_ajuda(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(view=view, ephemeral=True)
 
 
-class BotoesXP(LayoutViewDoBot):
+class BotoesXP(discord.ui.LayoutView):
     def __init__(self):
-        super().__init__(timeout=600)
+        super().__init__(timeout=None)
         self.add_item(
             discord.ui.Container(
                 layout.texto("## Sistema de XP\nVeja seu nivel, o ranking do servidor ou configure o sistema."),
                 layout.linha(
-                    layout.botao("Meu rank", _xp_acao_rank, discord.ButtonStyle.primary),
-                    layout.botao("Leaderboard", _xp_acao_leaderboard),
-                    layout.botao("Como funciona", _xp_acao_ajuda),
-                    layout.botao("Configuracoes (admin)", _xp_acao_config, discord.ButtonStyle.danger),
+                    layout.botao_fixo("Meu rank", "xp", "rank", discord.ButtonStyle.primary),
+                    layout.botao_fixo("Leaderboard", "xp", "leaderboard"),
+                    layout.botao_fixo("Como funciona", "xp", "ajuda"),
+                    layout.botao_fixo("Configuracoes (admin)", "xp", "config", discord.ButtonStyle.danger),
                 ),
                 accent_color=discord.Color.blue(),
             )
         )
+
+
+for _acao, _funcao in {
+    "rank": _xp_acao_rank,
+    "leaderboard": _xp_acao_leaderboard,
+    "ajuda": _xp_acao_ajuda,
+    "config": _xp_acao_config,
+}.items():
+    layout.registrar_acao("xp", _acao, _funcao)
 
 
 class XP(commands.Cog):

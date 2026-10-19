@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot import emojis
+from bot import emojis, layout
 from bot.config import BASE_DIR, TOKEN
 from bot.traducao import TradutorIngles
 from bot.retry_ui import interacao_expirou, oferecer_tentar_de_novo
@@ -68,6 +68,7 @@ class ArcoBot(commands.Bot):
 
         await self.tree.set_translator(TradutorIngles())
         await emojis.sincronizar(self)
+        self.add_dynamic_items(layout.BotaoFixo)
         for extensao in EXTENSOES:
             await self.load_extension(extensao)
 

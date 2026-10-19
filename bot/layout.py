@@ -58,3 +58,56 @@ def barra_progresso(atual: float, total: float, tamanho: int = 20) -> str:
     proporcao = min(atual / total, 1) if total else 0
     preenchido = round(tamanho * proporcao)
     return "█" * preenchido + "░" * (tamanho - preenchido)
+
+
+# ---------------------------------------------------------------- botoes fixos
+#
+# Botoes de painel que nao dependem da memoria do bot: a acao mora no
+# custom_id ("painel:musica:pular") e e procurada num registro na hora do
+# clique. Continuam funcionando depois que o bot reinicia e nunca expiram -
+# diferente de uma View comum, que some apos o timeout ou um reinicio.
+
+_ACOES: dict[str, Acao] = {}
+
+
+def registrar_acao(painel: str, acao: str, funcao: Acao) -> None:
+    _ACOES[f"{painel}:{acao}"] = funcao
+
+
+class BotaoFixo(discord.ui.DynamicItem[discord.ui.Button], template=r"painel:(?P<chave>[a-z_]+:[a-z_]+)"):
+    def __init__(
+        self,
+        chave: str,
+        rotulo: str = "",
+        estilo: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        emoji: discord.Emoji | discord.PartialEmoji | str | None = None,
+        desativado: bool = False,
+    ):
+        super().__init__(
+            discord.ui.Button(
+                label=rotulo, style=estilo, emoji=emoji, disabled=desativado, custom_id=f"painel:{chave}"
+            )
+        )
+        self.chave = chave
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match):
+        return cls(match["chave"], item.label or "", item.style, item.emoji, item.disabled)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        funcao = _ACOES.get(self.chave)
+        if funcao is None:
+            await interaction.response.send_message("Esse botao nao existe mais. Abra o painel de novo.", ephemeral=True)
+            return
+        await funcao(interaction)
+
+
+def botao_fixo(
+    rotulo: str,
+    painel: str,
+    acao: str,
+    estilo: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    emoji: discord.Emoji | str | None = None,
+    desativado: bool = False,
+) -> BotaoFixo:
+    return BotaoFixo(f"{painel}:{acao}", rotulo, estilo, emoji, desativado)

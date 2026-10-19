@@ -14,7 +14,7 @@ from bot import layout
 from bot.emojis import emoji
 from bot.config import DATA_DIR
 from bot.jsonstore import escrever_json, ler_json
-from bot.retry_ui import LayoutViewDoBot, ModalDoBot
+from bot.retry_ui import ModalDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -302,12 +302,12 @@ async def _abrir_modal_tocar(interaction: discord.Interaction) -> None:
     await interaction.response.send_modal(ModalTocarMusica())
 
 
-class PainelMusica(LayoutViewDoBot):
+class PainelMusica(discord.ui.LayoutView):
     """Painel do /musica: o que esta tocando (capa, link e progresso), as
     proximas da fila e os controles."""
 
     def __init__(self, guild: discord.Guild):
-        super().__init__(timeout=600)
+        super().__init__(timeout=None)
         fila = _filas_musica.get(guild.id, [])
         voice_client = guild.voice_client
         tocando = fila[0] if fila and voice_client is not None and voice_client.is_playing() else None
@@ -337,24 +337,36 @@ class PainelMusica(LayoutViewDoBot):
 
         container.add_item(
             layout.linha(
-                layout.botao("Tocar", _abrir_modal_tocar, discord.ButtonStyle.success, emoji=emoji("tocar")),
-                layout.botao("Anterior", _musica_acao_anterior, emoji=emoji("anterior")),
-                layout.botao("Pular", _musica_acao_pular, emoji=emoji("pular")),
-                layout.botao("Parar", _musica_acao_parar, discord.ButtonStyle.danger, emoji=emoji("parar")),
+                layout.botao_fixo("Tocar", "musica", "tocar", discord.ButtonStyle.success, emoji=emoji("tocar")),
+                layout.botao_fixo("Anterior", "musica", "anterior", emoji=emoji("anterior")),
+                layout.botao_fixo("Pular", "musica", "pular", emoji=emoji("pular")),
+                layout.botao_fixo("Parar", "musica", "parar", discord.ButtonStyle.danger, emoji=emoji("parar")),
             )
         )
         container.add_item(
             layout.linha(
-                layout.botao("Fila", _musica_acao_fila, emoji=emoji("fila")),
-                layout.botao("Limpar fila", _musica_acao_limpar_fila, discord.ButtonStyle.danger),
-                layout.botao("Atualizar", self._atualizar, discord.ButtonStyle.primary, emoji=emoji("atualizar")),
+                layout.botao_fixo("Fila", "musica", "fila", emoji=emoji("fila")),
+                layout.botao_fixo("Limpar fila", "musica", "limpar", discord.ButtonStyle.danger),
+                layout.botao_fixo("Atualizar", "musica", "atualizar", discord.ButtonStyle.primary, emoji=emoji("atualizar")),
             )
         )
         self.add_item(container)
 
-    async def _atualizar(self, interaction: discord.Interaction) -> None:
-        self.stop()
-        await interaction.response.edit_message(view=PainelMusica(interaction.guild))
+
+async def _musica_acao_atualizar(interaction: discord.Interaction) -> None:
+    await interaction.response.edit_message(view=PainelMusica(interaction.guild))
+
+
+for _acao, _funcao in {
+    "tocar": _abrir_modal_tocar,
+    "anterior": _musica_acao_anterior,
+    "pular": _musica_acao_pular,
+    "parar": _musica_acao_parar,
+    "fila": _musica_acao_fila,
+    "limpar": _musica_acao_limpar_fila,
+    "atualizar": _musica_acao_atualizar,
+}.items():
+    layout.registrar_acao("musica", _acao, _funcao)
 
 
 class Musica(commands.Cog):

@@ -13,7 +13,7 @@ from discord.ext import commands
 from bot import configstore, layout, sqlitestore
 from bot.config import DATA_DIR
 from bot.permissions import requer_hierarquia, requer_manage_guild, requer_permissao
-from bot.retry_ui import LayoutViewDoBot, ModalDoBot, ViewDoBot
+from bot.retry_ui import ModalDoBot, ViewDoBot
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +269,7 @@ async def _regras_do_bot(guild: discord.Guild) -> dict[str, discord.AutoModRule]
     return {regra.name: regra for regra in regras if regra.name.startswith(PREFIXO_REGRA)}
 
 
-async def _alternar_regra(bot: commands.Bot, guild: discord.Guild, nome: str) -> None:
+async def _alternar_regra(guild: discord.Guild, nome: str) -> None:
     regras = await _regras_do_bot(guild)
     regra = regras.get(nome)
     if regra is not None:
@@ -314,10 +314,12 @@ DESCRICOES_REGRAS = {
 }
 
 
+CHAVES_REGRAS = {"palavroes": REGRA_PALAVROES, "spam": REGRA_SPAM, "mencoes": REGRA_MENCOES}
+
+
 class ModalPalavrasProibidas(ModalDoBot, title="Palavras proibidas"):
-    def __init__(self, painel: "PainelAutoMod", atuais: list[str]):
+    def __init__(self, atuais: list[str]):
         super().__init__()
-        self.painel = painel
         self.palavras = discord.ui.TextInput(
             label="Separadas por virgula (vazio desativa)",
             style=discord.TextStyle.paragraph,
@@ -330,15 +332,15 @@ class ModalPalavrasProibidas(ModalDoBot, title="Palavras proibidas"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await _salvar_palavras(interaction.guild, _palavras_de_texto(str(self.palavras)))
-        await self.painel.atualizar(interaction)
+        await _atualizar_painel_automod(interaction)
 
 
-class PainelAutoMod(LayoutViewDoBot):
-    def __init__(self, bot: commands.Bot, regras: dict[str, discord.AutoModRule]):
-        super().__init__(timeout=600)
-        self.bot = bot
-        self.regras = regras
+class PainelAutoMod(discord.ui.LayoutView):
+    """Painel do /automod. Os botoes sao fixos (layout.botao_fixo): o estado
+    vem sempre do Discord na hora do clique, entao o painel nao expira."""
 
+    def __init__(self, regras: dict[str, discord.AutoModRule]):
+        super().__init__(timeout=None)
         container = discord.ui.Container(
             layout.texto(
                 "## Moderacao automatica\n"
@@ -347,15 +349,16 @@ class PainelAutoMod(LayoutViewDoBot):
             ),
             accent_color=discord.Color.red(),
         )
-        for nome, descricao in DESCRICOES_REGRAS.items():
+        for chave, nome in CHAVES_REGRAS.items():
             ativa = nome in regras
             container.add_item(layout.separador())
             container.add_item(
                 discord.ui.Section(
-                    f"**{nome.removeprefix(PREFIXO_REGRA)}** - {'ativa' if ativa else 'desligada'}\n{descricao}",
-                    accessory=layout.botao(
+                    f"**{nome.removeprefix(PREFIXO_REGRA)}** - {'ativa' if ativa else 'desligada'}\n{DESCRICOES_REGRAS[nome]}",
+                    accessory=layout.botao_fixo(
                         "Desligar" if ativa else "Ligar",
-                        self._alternador(nome),
+                        "automod",
+                        chave,
                         discord.ButtonStyle.secondary if ativa else discord.ButtonStyle.success,
                     ),
                 )
@@ -368,28 +371,45 @@ class PainelAutoMod(LayoutViewDoBot):
         container.add_item(
             discord.ui.Section(
                 f"**Palavras proibidas** - {len(palavras)} configurada(s)\n-# {resumo}",
-                accessory=layout.botao("Editar", self._editar_palavras, discord.ButtonStyle.primary),
+                accessory=layout.botao_fixo("Editar", "automod", "palavras", discord.ButtonStyle.primary),
             )
         )
         self.add_item(container)
 
-    def _alternador(self, nome: str):
-        async def alternar(interaction: discord.Interaction) -> None:
-            await interaction.response.defer()
-            await _alternar_regra(self.bot, interaction.guild, nome)
-            await self.atualizar(interaction)
 
-        return alternar
+async def _atualizar_painel_automod(interaction: discord.Interaction) -> None:
+    regras = await _regras_do_bot(interaction.guild)
+    await interaction.edit_original_response(view=PainelAutoMod(regras))
 
-    async def _editar_palavras(self, interaction: discord.Interaction) -> None:
-        regra = self.regras.get(REGRA_PALAVRAS)
-        atuais = regra.trigger.keyword_filter if regra else []
-        await interaction.response.send_modal(ModalPalavrasProibidas(self, atuais))
 
-    async def atualizar(self, interaction: discord.Interaction) -> None:
-        regras = await _regras_do_bot(interaction.guild)
-        self.stop()
-        await interaction.edit_original_response(view=PainelAutoMod(self.bot, regras))
+async def _pode_mexer_no_automod(interaction: discord.Interaction) -> bool:
+    if interaction.guild is None or not interaction.permissions.manage_guild:
+        await interaction.response.send_message("So quem tem Gerenciar Servidor mexe no AutoMod.", ephemeral=True)
+        return False
+    return True
+
+
+def _alternador(nome: str):
+    async def alternar(interaction: discord.Interaction) -> None:
+        if not await _pode_mexer_no_automod(interaction):
+            return
+        await interaction.response.defer()
+        await _alternar_regra(interaction.guild, nome)
+        await _atualizar_painel_automod(interaction)
+
+    return alternar
+
+
+async def _editar_palavras(interaction: discord.Interaction) -> None:
+    if not await _pode_mexer_no_automod(interaction):
+        return
+    regra = (await _regras_do_bot(interaction.guild)).get(REGRA_PALAVRAS)
+    await interaction.response.send_modal(ModalPalavrasProibidas(regra.trigger.keyword_filter if regra else []))
+
+
+for _chave, _nome in CHAVES_REGRAS.items():
+    layout.registrar_acao("automod", _chave, _alternador(_nome))
+layout.registrar_acao("automod", "palavras", _editar_palavras)
 
 
 # ---------------------------------------------------------------- denuncia
@@ -791,7 +811,7 @@ class Moderacao(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         regras = await _regras_do_bot(interaction.guild)
-        await interaction.followup.send(view=PainelAutoMod(self.bot, regras), ephemeral=True)
+        await interaction.followup.send(view=PainelAutoMod(regras), ephemeral=True)
 
     # ---- eventos que vao para o canal de logs
 

@@ -3,7 +3,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import layout
-from bot.retry_ui import LayoutViewDoBot
 
 # Categorias mostradas pelo /ajuda. Atualizar aqui sempre que um comando for
 # criado, renomeado ou removido (as descricoes vem direto de cada comando;
@@ -88,7 +87,24 @@ def _texto_categoria(
     return "\n".join(linhas), all(comando_restrito(c) for c in visiveis)
 
 
-class PainelAjuda(LayoutViewDoBot):
+class SeletorAjuda(discord.ui.DynamicItem[discord.ui.Select], template=r"ajuda:categoria"):
+    """Menu de categorias do /ajuda. Nao guarda nada em memoria: na troca,
+    remonta o painel com as permissoes de quem clicou - funciona mesmo
+    depois que o bot reinicia ou que o painel fica aberto por horas."""
+
+    def __init__(self, item: discord.ui.Select):
+        super().__init__(item)
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Select, match):
+        return cls(item)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        categoria = self.item.values[0] if self.item.values else None
+        await interaction.response.edit_message(view=painel_ajuda_para(interaction.client, interaction, categoria))
+
+
+class PainelAjuda(discord.ui.LayoutView):
     def __init__(
         self,
         bot: commands.Bot,
@@ -96,10 +112,7 @@ class PainelAjuda(LayoutViewDoBot):
         no_servidor: bool,
         categoria: str | None = None,
     ):
-        super().__init__(timeout=600)
-        self.bot = bot
-        self.permissoes = permissoes
-        self.no_servidor = no_servidor
+        super().__init__(timeout=None)
 
         textos = {
             nome: texto
@@ -112,6 +125,7 @@ class PainelAjuda(LayoutViewDoBot):
         alguma_restrita = any("🔒" in texto for texto, _ in textos.values())
 
         seletor = discord.ui.Select(
+            custom_id="ajuda:categoria",
             placeholder="Escolha uma categoria",
             options=[
                 discord.SelectOption(
@@ -123,8 +137,6 @@ class PainelAjuda(LayoutViewDoBot):
                 for nome, (_, equipe) in textos.items()
             ],
         )
-        seletor.callback = self._trocar
-        self.seletor = seletor
 
         cabecalho = "## Comandos do bot\n-# Digite `/` no chat para ver os parametros de cada um."
         if not no_servidor:
@@ -132,7 +144,7 @@ class PainelAjuda(LayoutViewDoBot):
         titulo = f"### {EMOJIS_CATEGORIAS[categoria]} {categoria}" + (" · so para a equipe" if so_equipe else "")
         container = discord.ui.Container(
             layout.texto(cabecalho),
-            layout.linha(seletor),
+            layout.linha(SeletorAjuda(seletor)),
             layout.separador(),
             layout.texto(f"{titulo}\n{corpo}"),
             accent_color=discord.Color.blue(),
@@ -141,18 +153,14 @@ class PainelAjuda(LayoutViewDoBot):
             container.add_item(layout.texto("-# 🔒 So aparece para quem tem a permissao (moderacao/administracao)."))
         self.add_item(container)
 
-    async def _trocar(self, interaction: discord.Interaction) -> None:
-        self.stop()
-        await interaction.response.edit_message(
-            view=PainelAjuda(self.bot, self.permissoes, self.no_servidor, self.seletor.values[0])
-        )
 
-
-def painel_ajuda_para(bot: commands.Bot, interaction: discord.Interaction) -> PainelAjuda:
+def painel_ajuda_para(
+    bot: commands.Bot, interaction: discord.Interaction, categoria: str | None = None
+) -> PainelAjuda:
     # Com o bot no servidor valem as permissoes da pessoa no canal; sem ele
     # (DM, ou app instalado so na conta), so os comandos de usuario.
     no_servidor = interaction.guild is not None and interaction.is_guild_integration()
-    return PainelAjuda(bot, interaction.permissions, no_servidor)
+    return PainelAjuda(bot, interaction.permissions, no_servidor, categoria)
 
 
 class Geral(commands.Cog):
@@ -173,4 +181,5 @@ class Geral(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    bot.add_dynamic_items(SeletorAjuda)
     await bot.add_cog(Geral(bot))

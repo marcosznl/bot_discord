@@ -82,7 +82,7 @@ def test_paineis_serializam(bot_carregado):
             ),
             BotoesXP(),
             PainelMusica(guild_sem_voz),
-            PainelAutoMod(bot, {}),
+            PainelAutoMod({}),
             painel_tickets(None, 0),
         ]
 
@@ -210,7 +210,7 @@ def _texto_do_painel(view) -> str:
 
 
 def _categorias(view) -> dict[str, str | None]:
-    seletor = next(item for item in view.walk_children() if isinstance(item, discord.ui.Select))
+    seletor = next(item.item for item in view.walk_children() if isinstance(item, discord.ui.DynamicItem))
     return {opcao.label: opcao.description for opcao in seletor.options}
 
 
@@ -265,3 +265,26 @@ def test_ajuda_fora_do_servidor_so_comandos_de_usuario(bot_carregado):
     texto = _texto_do_painel(painel)
     assert "/ping" in texto and "/ajuda" in texto and "/servidor" not in texto
     assert set(_categorias(painel)) <= {"Geral", "Comunidade", "Niveis e jogos", "Clique direito"}
+
+
+def test_paineis_fixos_tem_acao_registrada(bot_carregado):
+    """Todo botao fixo dos paineis precisa ter uma acao registrada, senao
+    o clique cai em "Esse botao nao existe mais"."""
+    from bot import layout
+    from bot.cogs.moderacao import PainelAutoMod
+    from bot.cogs.musica import PainelMusica
+    from bot.cogs.xp import BotoesXP
+
+    _, loop = bot_carregado
+
+    async def montar():
+        return [PainelMusica(SimpleNamespace(id=1, voice_client=None)), BotoesXP(), PainelAutoMod({})]
+
+    chaves = [
+        item.chave
+        for view in loop.run_until_complete(montar())
+        for item in view.walk_children()
+        if isinstance(item, layout.BotaoFixo)
+    ]
+    assert len(chaves) == 7 + 4 + 4
+    assert all(chave in layout._ACOES for chave in chaves)
