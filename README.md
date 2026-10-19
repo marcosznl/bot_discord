@@ -17,8 +17,11 @@
   <a href="#comandos">Comandos</a> &nbsp;·&nbsp;
   <a href="#instalação">Instalação</a> &nbsp;·&nbsp;
   <a href="#manter-sempre-ligado">Sempre ligado</a> &nbsp;·&nbsp;
-  <a href="#dados-e-backup">Dados e backup</a>
+  <a href="#dados-e-backup">Dados e backup</a> &nbsp;·&nbsp;
+  <a href="#licença">Licença</a>
 </p>
+
+> **Projeto concluído.** O Arco está completo e não recebe mais atualizações nem fica online. O código continua aqui para quem quiser estudar ou rodar o próprio bot seguindo a [instalação](#instalação).
 
 Só usa slash commands e menus de clique direito, e os painéis usam o layout novo do Discord (Components V2). As respostas privadas ("Só você pode ver isso") somem sozinhas: confirmações e avisos em 15 segundos, painéis e arquivos em 10 minutos. Os botões de painel (cargos, tickets, sorteios, sugestões, verificação, candidaturas, retribuir) continuam funcionando depois que o bot reinicia. Quem usa o Discord em inglês vê os comandos em inglês.
 
@@ -241,3 +244,7 @@ venv/bin/pytest
 ```
 
 Além das funções puras e dos bancos de cada recurso, os testes carregam o bot inteiro sem conectar e serializam todos os comandos, painéis e formulários. Também conferem que todo comando tem tradução e aparece no `/ajuda`. Isso pega nome inválido, limite de componentes e erro de import antes de subir o bot de verdade.
+
+## Licença
+
+[MIT](LICENSE): pode usar, modificar e distribuir, mantendo o aviso de autoria.
