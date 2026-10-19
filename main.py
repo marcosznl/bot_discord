@@ -5,18 +5,25 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.config import TOKEN
+from bot.retry_ui import interacao_expirou, oferecer_tentar_de_novo
 
 logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
-intents.members = True  # necessario para o evento de boas-vindas (on_member_join)
+intents.members = True  # boas-vindas e logs de entrada/saida (on_member_join/remove)
+# Conteudo das mensagens - so para o canal de logs mostrar o que foi apagado
+# ou editado. Precisa estar ligado em Developer Portal > Bot > Privileged
+# Gateway Intents, senao o bot nem conecta.
+intents.message_content = True
 
-# Cogs de feature, carregados um a um conforme vao sendo extraidos de main.py.
 EXTENSOES = [
     "bot.cogs.boasvindas",
     "bot.cogs.diversao",
     "bot.cogs.musica",
     "bot.cogs.xp",
+    "bot.cogs.moderacao",
+    "bot.cogs.info",
+    "bot.cogs.comunidade",
     "bot.cogs.geral",
 ]
 
@@ -32,7 +39,7 @@ bot = ArcoBot(
     intents=intents,
     activity=discord.Game(name="Dattebayo!"),
     # Nada aqui usa guild.members ou cache de membros - so o intent e
-    # necessario (pro evento on_member_join). Sem isso, toda reconexao baixava
+    # necessario (pros eventos de membro). Sem isso, toda reconexao baixava
     # a lista inteira de membros de cada servidor a toa.
     chunk_guilds_at_startup=False,
 )
@@ -54,69 +61,51 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError) 
     raise error
 
 
-class TentarComandoNovamente(discord.ui.View):
-    """Mostrado quando a interacao original expira antes do bot conseguir
-    responder (o Discord so espera 3s pela primeira resposta). Ao clicar,
-    reexecuta o mesmo comando com os mesmos parametros, mas numa interacao
-    nova - com uma janela de 3s do zero."""
-
-    def __init__(self, comando: app_commands.Command, kwargs: dict, autor_id: int):
-        super().__init__(timeout=300)
-        self.comando = comando
-        self.kwargs = kwargs
-        self.autor_id = autor_id
-        self.mensagem: discord.Message | None = None
-
-    @discord.ui.button(label="Tentar de novo", style=discord.ButtonStyle.primary)
-    async def tentar(self, interaction: discord.Interaction, botao: discord.ui.Button) -> None:
-        if interaction.user.id != self.autor_id:
-            await interaction.response.send_message(
-                "So quem pediu o comando pode tentar de novo.", ephemeral=True
-            )
-            return
-
-        for item in self.children:
-            item.disabled = True
-        if self.mensagem is not None:
-            await self.mensagem.edit(view=self)
-        self.stop()
-
-        if self.comando.binding is not None:
-            await self.comando._callback(self.comando.binding, interaction, **self.kwargs)
+def _reexecutar(comando: app_commands.Command, kwargs: dict):
+    async def retomar(interaction: discord.Interaction) -> None:
+        if comando.binding is not None:
+            await comando._callback(comando.binding, interaction, **kwargs)
         else:
-            await self.comando._callback(interaction, **self.kwargs)
+            await comando._callback(interaction, **kwargs)
+
+    return retomar
 
 
 @tree.error
 async def on_tree_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     comando = interaction.command
-    # interaction.response.is_done() so fica True depois que a PRIMEIRA
-    # resposta e aceita pelo Discord (o codigo interno do discord.py so seta
-    # isso apos a chamada de rede ter sucesso). Se ainda for False aqui, a
-    # interacao nunca foi respondida nem uma vez - ou seja, nao teve como o
-    # comando ter passado da primeira linha (todo comando deste bot responde
-    # ou da defer antes de qualquer efeito colateral). So nesse caso e seguro
-    # reexecutar do zero sem risco de duplicar uma acao que ja rodou.
-    interacao_nunca_respondida = not interaction.response.is_done()
-    interacao_expirou = (
-        isinstance(error, app_commands.CommandInvokeError)
-        and isinstance(error.original, discord.NotFound)
-        and error.original.code == 10062
-        and interacao_nunca_respondida
-    )
+    original = getattr(error, "original", error)
 
-    if interacao_expirou and comando is not None and interaction.channel is not None:
+    # Todo comando deste bot responde ou da defer antes de qualquer efeito
+    # colateral, entao se a interacao expirou sem resposta nenhuma da pra
+    # reexecutar do zero com os mesmos parametros. Menus de contexto ficam de
+    # fora: o alvo deles nao vem no namespace.
+    if (
+        isinstance(comando, app_commands.Command)
+        and isinstance(error, app_commands.CommandInvokeError)
+        and interacao_expirou(original, interaction)
+    ):
         kwargs = {nome: valor for nome, valor in interaction.namespace}
-        view = TentarComandoNovamente(comando, kwargs, interaction.user.id)
-        view.mensagem = await interaction.channel.send(
-            f"{interaction.user.mention} a interacao expirou antes de eu conseguir responder ao "
-            f"`/{comando.qualified_name}` (o Discord so espera 3s pela primeira resposta).",
-            view=view,
+        await oferecer_tentar_de_novo(
+            interaction, _reexecutar(comando, kwargs), f" ao `/{comando.qualified_name}`"
         )
         return
 
+    # Sem permissao no servidor (cargo do bot abaixo do alvo, canal trancado
+    # pro bot etc.) - avisa em vez de so sumir com o erro no log.
+    if isinstance(original, discord.Forbidden):
+        texto = "Nao tenho permissao no Discord para fazer isso aqui (confira os cargos e permissoes do bot)."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(texto, ephemeral=True)
+            else:
+                await interaction.response.send_message(texto, ephemeral=True)
+        except discord.HTTPException:
+            pass
+        return
+
     if comando is not None:
-        if comando._has_any_error_handlers():
+        if isinstance(comando, app_commands.Command) and comando._has_any_error_handlers():
             return
         logger.error(f"Ignorando excecao no comando {comando.name!r}", exc_info=error)
     else:
@@ -125,13 +114,6 @@ async def on_tree_error(interaction: discord.Interaction, error: app_commands.Ap
 
 @bot.event
 async def on_ready():
-    cog_musica = bot.get_cog("Musica")
-    if not cog_musica.verificar_ocioso_voz.is_running():
-        cog_musica.verificar_ocioso_voz.start()
-    cog_xp = bot.get_cog("XP")
-    if not cog_xp.verificar_xp_semana.is_running():
-        cog_xp.verificar_xp_semana.start()
-
     if bot.owner_id is None:
         app_info = await bot.application_info()
         bot.owner_id = app_info.owner.id
@@ -145,4 +127,10 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    bot.run(TOKEN, root_logger=True)
+    try:
+        bot.run(TOKEN, root_logger=True)
+    except discord.PrivilegedIntentsRequired:
+        logger.error(
+            "O Discord recusou os intents do bot. Ligue 'Server Members Intent' e "
+            "'Message Content Intent' em https://discord.com/developers/applications > Bot."
+        )

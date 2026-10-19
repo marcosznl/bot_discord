@@ -118,6 +118,7 @@ class BoasVindas(commands.Cog):
 
     @app_commands.command(name="boasvindas", description="Configura a mensagem de boas-vindas para novos membros")
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     async def boasvindas(self, interaction: discord.Interaction):
         if not await requer_manage_guild(interaction, "esse comando"):
             return

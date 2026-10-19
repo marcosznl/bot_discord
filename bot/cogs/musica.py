@@ -1,13 +1,15 @@
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 
 import discord
 import yt_dlp
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot.retry_ui import ModalComRetry, ViewComRetry
+from bot import layout
+from bot.retry_ui import LayoutViewComRetry, ModalComRetry
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +29,20 @@ VOICE_IDLE_TIMEOUT = 300
 # YouTube bloqueou (403) em vez do fim natural da musica - vale tentar de novo.
 FALHA_REPRODUCAO_SEGUNDOS = 2.0
 
-_filas_musica: dict[int, list[tuple[str, str, int | None]]] = {}
-_historico_musica: dict[int, list[tuple[str, str, int | None]]] = {}
+
+
+@dataclass
+class Faixa:
+    titulo: str
+    busca: str
+    duracao: int | None
+    pagina: str | None = None  # link do video, para o painel e para tocar de novo o mesmo video
+    miniatura: str | None = None
+
+
+_filas_musica: dict[int, list[Faixa]] = {}
+_historico_musica: dict[int, list[Faixa]] = {}
+_inicio_faixa: dict[int, float] = {}
 _pular_avanco_historico: dict[int, bool] = {}
 _ocioso_desde: dict[int, float] = {}
 _locks_musica: dict[int, asyncio.Lock] = {}
@@ -42,13 +56,21 @@ def _lock_musica(guild_id: int) -> asyncio.Lock:
     return _locks_musica.setdefault(guild_id, asyncio.Lock())
 
 
-def _ytdlp_buscar(busca: str) -> tuple[str, str, str, int | None]:
+def _ytdlp_buscar(busca: str) -> tuple[Faixa, str, str]:
+    """Devolve a faixa + url do stream de audio + user-agent exigido por ele."""
     with yt_dlp.YoutubeDL(YTDLP_OPTS) as ydl:
         info = ydl.extract_info(busca, download=False)
         if "entries" in info:
             info = info["entries"][0]
         user_agent = info.get("http_headers", {}).get("User-Agent", "")
-        return info["title"], info["url"], user_agent, info.get("duration")
+        faixa = Faixa(
+            titulo=info["title"],
+            busca=busca,
+            duracao=info.get("duration"),
+            pagina=info.get("webpage_url"),
+            miniatura=info.get("thumbnail"),
+        )
+        return faixa, info["url"], user_agent
 
 
 def _formatar_duracao_musica(segundos) -> str:
@@ -67,10 +89,13 @@ def _tocar_proximo(guild_id: int, voice_client: discord.VoiceClient, tentativas:
     if not fila:
         return
 
-    titulo, busca, _ = fila[0]
+    faixa = fila[0]
+    titulo = faixa.titulo
 
     try:
-        _, url, user_agent, _ = _ytdlp_buscar(busca)
+        # Pelo link do video (quando conhecido), nao pela busca original - uma
+        # busca por texto pode cair num video diferente na segunda vez.
+        _, url, user_agent = _ytdlp_buscar(faixa.pagina or faixa.busca)
     except Exception as erro:
         logger.error(f"Erro ao extrair musica '{titulo}': {erro}")
         fila.pop(0)
@@ -83,6 +108,7 @@ def _tocar_proximo(guild_id: int, voice_client: discord.VoiceClient, tentativas:
     }
     fonte = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
     inicio = time.time()
+    _inicio_faixa[guild_id] = inicio
 
     def _apos_tocar(erro):
         duracao = time.time() - inicio
@@ -122,7 +148,7 @@ async def _musica_acao_tocar(interaction: discord.Interaction, busca: str) -> No
         await voice_client.move_to(canal_voz)
 
     try:
-        titulo, _, _, duracao = await asyncio.to_thread(_ytdlp_buscar, busca)
+        faixa, _, _ = await asyncio.to_thread(_ytdlp_buscar, busca)
     except Exception as erro:
         # Nivel baixo de proposito - e uma busca sem resultado (situacao normal
         # e ja tratada abaixo), nao uma falha inesperada do sistema.
@@ -130,17 +156,17 @@ async def _musica_acao_tocar(interaction: discord.Interaction, busca: str) -> No
         await interaction.followup.send("Nao consegui encontrar essa musica.")
         return
 
-    duracao_txt = _formatar_duracao_musica(duracao)
+    duracao_txt = _formatar_duracao_musica(faixa.duracao)
 
     async with _lock_musica(interaction.guild.id):
         fila = _filas_musica.setdefault(interaction.guild.id, [])
-        fila.append((titulo, busca, duracao))
+        fila.append(faixa)
 
         if not voice_client.is_playing() and not voice_client.is_paused():
             await asyncio.to_thread(_tocar_proximo, interaction.guild.id, voice_client)
-            await interaction.followup.send(f"Tocando agora: {titulo} ({duracao_txt})")
+            await interaction.followup.send(f"Tocando agora: {faixa.titulo} ({duracao_txt})")
         else:
-            await interaction.followup.send(f"Adicionado na fila: {titulo} ({duracao_txt})")
+            await interaction.followup.send(f"Adicionado na fila ({len(fila) - 1}): {faixa.titulo} ({duracao_txt})")
 
 
 async def _musica_acao_pular(interaction: discord.Interaction) -> None:
@@ -169,7 +195,7 @@ async def _musica_acao_anterior(interaction: discord.Interaction) -> None:
     fila = _filas_musica.setdefault(guild_id, [])
     fila.insert(0, anterior)
 
-    await interaction.response.send_message(f"Voltando para: {anterior[0]} ({_formatar_duracao_musica(anterior[2])})")
+    await interaction.response.send_message(f"Voltando para: {anterior.titulo} ({_formatar_duracao_musica(anterior.duracao)})")
 
     if voice_client.is_playing() or voice_client.is_paused():
         _pular_avanco_historico[guild_id] = True
@@ -202,22 +228,30 @@ async def _musica_acao_limpar_fila(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("Fila limpa (a musica atual continua tocando).")
 
 
+def _texto_faixa(faixa: Faixa) -> str:
+    titulo = faixa.titulo.replace("[", "(").replace("]", ")")
+    nome = f"[{titulo}]({faixa.pagina})" if faixa.pagina else titulo
+    return f"{nome} ({_formatar_duracao_musica(faixa.duracao)})"
+
+
 async def _musica_acao_fila(interaction: discord.Interaction) -> None:
     fila = _filas_musica.get(interaction.guild.id, [])
     if not fila:
         await interaction.response.send_message("A fila esta vazia.", ephemeral=True)
         return
 
-    linhas = []
-    for posicao, (titulo, _, duracao) in enumerate(fila):
-        duracao_txt = _formatar_duracao_musica(duracao)
-        if posicao == 0:
-            linhas.append(f"**Tocando agora:** {titulo} ({duracao_txt})")
-        else:
-            linhas.append(f"{posicao}. {titulo} ({duracao_txt})")
-
-    embed = discord.Embed(title="Fila de musica", description="\n".join(linhas), color=discord.Color.blurple())
-    await interaction.response.send_message(embed=embed)
+    linhas = [f"**Tocando agora:** {_texto_faixa(fila[0])}"]
+    linhas += [f"{posicao}. {_texto_faixa(faixa)}" for posicao, faixa in enumerate(fila[1:26], start=1)]
+    if len(fila) > 26:
+        linhas.append(f"-# ... e mais {len(fila) - 26}")
+    total = sum(faixa.duracao or 0 for faixa in fila)
+    view = layout.view_estatica(
+        layout.texto(f"## Fila de musica\n-# {len(fila)} faixa(s), {_formatar_duracao_musica(total)} no total"),
+        layout.separador(),
+        layout.texto("\n".join(linhas)),
+        cor=discord.Color.blurple(),
+    )
+    await interaction.response.send_message(view=view, ephemeral=True)
 
 
 class ModalTocarMusica(ModalComRetry, title="Tocar musica"):
@@ -227,42 +261,73 @@ class ModalTocarMusica(ModalComRetry, title="Tocar musica"):
         await _musica_acao_tocar(interaction, str(self.busca))
 
 
+async def _abrir_modal_tocar(interaction: discord.Interaction) -> None:
+    await interaction.response.send_modal(ModalTocarMusica())
 
 
-class BotoesMusica(ViewComRetry):
-    def __init__(self):
+class PainelMusica(LayoutViewComRetry):
+    """Painel do /musica: o que esta tocando (capa, link e progresso), as
+    proximas da fila e os controles."""
+
+    def __init__(self, guild: discord.Guild):
         super().__init__(timeout=600)
+        fila = _filas_musica.get(guild.id, [])
+        voice_client = guild.voice_client
+        tocando = fila[0] if fila and voice_client is not None and voice_client.is_playing() else None
 
-    @discord.ui.button(label="Tocar", style=discord.ButtonStyle.success)
-    async def tocar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await interaction.response.send_modal(ModalTocarMusica())
+        container = discord.ui.Container(accent_color=discord.Color.blurple())
+        if tocando is None:
+            container.add_item(layout.texto("## Musica\nNada tocando agora. Clique em **Tocar** para comecar."))
+        else:
+            decorrido = time.time() - _inicio_faixa.get(guild.id, time.time())
+            progresso = ""
+            if tocando.duracao:
+                barra = layout.barra_progresso(decorrido, tocando.duracao, tamanho=16)
+                progresso = f"\n`{barra}` {_formatar_duracao_musica(decorrido) if decorrido >= 1 else '0:00'} / {_formatar_duracao_musica(tocando.duracao)}"
+            container.add_item(
+                layout.secao_com_miniatura(
+                    f"## Tocando agora\n{_texto_faixa(tocando)}{progresso}\n-# Canal: {voice_client.channel.mention}",
+                    tocando.miniatura,
+                )
+            )
+            proximas = fila[1:4]
+            if proximas:
+                linhas = [f"{posicao}. {_texto_faixa(faixa)}" for posicao, faixa in enumerate(proximas, start=1)]
+                if len(fila) > 4:
+                    linhas.append(f"-# ... e mais {len(fila) - 4} na fila")
+                container.add_item(layout.separador())
+                container.add_item(layout.texto("**A seguir**\n" + "\n".join(linhas)))
 
-    @discord.ui.button(label="Anterior", style=discord.ButtonStyle.secondary)
-    async def anterior(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _musica_acao_anterior(interaction)
+        container.add_item(
+            layout.linha(
+                layout.botao("Tocar", _abrir_modal_tocar, discord.ButtonStyle.success),
+                layout.botao("Anterior", _musica_acao_anterior),
+                layout.botao("Pular", _musica_acao_pular),
+                layout.botao("Parar", _musica_acao_parar, discord.ButtonStyle.danger),
+            )
+        )
+        container.add_item(
+            layout.linha(
+                layout.botao("Fila", _musica_acao_fila),
+                layout.botao("Limpar fila", _musica_acao_limpar_fila, discord.ButtonStyle.danger),
+                layout.botao("Atualizar", self._atualizar, discord.ButtonStyle.primary),
+            )
+        )
+        self.add_item(container)
 
-    @discord.ui.button(label="Pular", style=discord.ButtonStyle.secondary)
-    async def pular(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _musica_acao_pular(interaction)
-
-    @discord.ui.button(label="Parar", style=discord.ButtonStyle.danger)
-    async def parar(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _musica_acao_parar(interaction)
-
-    @discord.ui.button(label="Fila", style=discord.ButtonStyle.secondary)
-    async def fila(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _musica_acao_fila(interaction)
-
-    @discord.ui.button(label="Limpar fila", style=discord.ButtonStyle.danger)
-    async def limpar_fila(self, interaction: discord.Interaction, botao: discord.ui.Button):
-        await _musica_acao_limpar_fila(interaction)
+    async def _atualizar(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(view=PainelMusica(interaction.guild))
 
 
 class Musica(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def cog_unload(self) -> None:
+    async def cog_load(self) -> None:
+        self.verificar_ocioso_voz.start()
+
+    async def cog_unload(self) -> None:
         self.verificar_ocioso_voz.cancel()
 
     @tasks.loop(seconds=30)
@@ -282,14 +347,17 @@ class Musica(commands.Cog):
             if agora - inicio >= VOICE_IDLE_TIMEOUT:
                 _filas_musica.pop(guild.id, None)
                 _ocioso_desde.pop(guild.id, None)
+                _inicio_faixa.pop(guild.id, None)
                 await voice_client.disconnect()
+
+    @verificar_ocioso_voz.before_loop
+    async def _antes_ocioso(self):
+        await self.bot.wait_until_ready()
 
     @app_commands.command(name="musica", description="Controla a reproducao de musica")
     @app_commands.guild_only()
     async def musica(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            "O que voce quer fazer com a musica?", view=BotoesMusica(), ephemeral=True
-        )
+        await interaction.response.send_message(view=PainelMusica(interaction.guild), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
