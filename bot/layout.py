@@ -17,8 +17,9 @@ def botao(
     acao: Acao,
     estilo: discord.ButtonStyle = discord.ButtonStyle.secondary,
     desativado: bool = False,
+    emoji: discord.Emoji | str | None = None,
 ) -> discord.ui.Button:
-    item = discord.ui.Button(label=rotulo, style=estilo, disabled=desativado)
+    item = discord.ui.Button(label=rotulo, style=estilo, disabled=desativado, emoji=emoji)
     item.callback = acao
     return item
 

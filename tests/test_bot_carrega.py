@@ -10,8 +10,14 @@ import pytest
 
 
 @pytest.fixture
-def bot_carregado():
+def bot_carregado(monkeypatch):
     import main
+
+    async def sem_rede(_client):
+        pass
+
+    # Subir os emojis do bot precisa de login no Discord.
+    monkeypatch.setattr(main.emojis, "sincronizar", sem_rede)
 
     async def montar():
         await main.bot._async_setup_hook()
@@ -37,7 +43,9 @@ def test_comandos_serializam(bot_carregado):
         "ping", "ajuda", "usuario", "avatar", "servidor", "mod", "logs", "automod", "boasvindas",
         "enquete", "cargos", "tickets", "evento", "lembrete", "xp", "interagir", "gif", "musica",
         "sorteio", "sugerir", "verificacao", "candidaturas", "som", "sala", "aniversario", "configurar",
+        "palco", "emoji", "anuncio", "cargo_visual",
         "Ver perfil", "Ver avatar", "Ver rank XP", "Denunciar mensagem", "Fixar ou desafixar",
+        "Adicionar emojis ao servidor",
     }
     assert esperados <= nomes
     assert not {"status", "socao", "abraco", "charme", "limpar"} & nomes
@@ -132,3 +140,49 @@ def test_paineis_dos_recursos_novos(bot_carregado):
     for view in views:
         assert view.to_components()
     assert len(modal.to_components()) == 5
+
+
+def test_traducao_cobre_todos_os_comandos(bot_carregado):
+    from bot.traducao import DESCRICOES, NOMES
+
+    bot, _ = bot_carregado
+    faltando = []
+    for tipo in discord.AppCommandType:
+        for comando in bot.tree.get_commands(type=tipo):
+            itens = [comando, *getattr(comando, "commands", [])]
+            for item in itens:
+                if item.name not in NOMES:
+                    faltando.append(f"nome: {item.name}")
+                descricao = getattr(item, "description", None)
+                if descricao and descricao not in DESCRICOES:
+                    faltando.append(f"descricao: {descricao}")
+    assert not faltando
+
+
+def test_tradutor_responde_so_em_ingles():
+    from discord import app_commands
+
+    from bot.traducao import TradutorIngles
+
+    async def traduzir(texto, idioma, local):
+        contexto = app_commands.TranslationContext(location=local, data=None)
+        return await TradutorIngles().translate(app_commands.locale_str(texto), idioma, contexto)
+
+    nome = app_commands.TranslationContextLocation.command_name
+    assert asyncio.run(traduzir("musica", discord.Locale.american_english, nome)) == "music"
+    assert asyncio.run(traduzir("musica", discord.Locale.brazil_portuguese, nome)) is None
+
+
+def test_modal_de_anuncio(bot_carregado):
+    from bot.cogs.anuncios import ModalAnuncio, montar_anuncio
+
+    _, loop = bot_carregado
+
+    async def montar():
+        canal = SimpleNamespace(id=1, mention="#geral")
+        dados = {"titulo": "Evento", "texto": "Sabado!", "botao": ["Inscreva-se", "https://x.com"], "cargo": 5, "imagem": "imagem.png"}
+        return ModalAnuncio(canal, None, None, None), montar_anuncio(dados)
+
+    modal, view = loop.run_until_complete(montar())
+    assert len(modal.to_components()) == 4
+    assert view.to_components()

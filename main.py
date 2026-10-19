@@ -1,10 +1,14 @@
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.config import TOKEN
+from bot import emojis
+from bot.config import BASE_DIR, TOKEN
+from bot.traducao import TradutorIngles
 from bot.retry_ui import interacao_expirou, oferecer_tentar_de_novo
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,10 @@ EXTENSOES = [
     "bot.cogs.aniversarios",
     "bot.cogs.destaques",
     "bot.cogs.contagem",
+    "bot.cogs.expressoes",
+    "bot.cogs.anuncios",
+    "bot.cogs.servidor",
+    "bot.cogs.manutencao",
     "bot.cogs.configuracao",
     "bot.cogs.geral",
 ]
@@ -39,6 +47,8 @@ EXTENSOES = [
 
 class ArcoBot(commands.Bot):
     async def setup_hook(self) -> None:
+        await self.tree.set_translator(TradutorIngles())
+        await emojis.sincronizar(self)
         for extensao in EXTENSOES:
             await self.load_extension(extensao)
 
@@ -100,6 +110,12 @@ async def on_tree_error(interaction: discord.Interaction, error: app_commands.Ap
         )
         return
 
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            f"Calma! Tente de novo em {error.retry_after:.0f}s.", ephemeral=True
+        )
+        return
+
     # Sem permissao no servidor (cargo do bot abaixo do alvo, canal trancado
     # pro bot etc.) - avisa em vez de so sumir com o erro no log.
     if isinstance(original, discord.Forbidden):
@@ -135,9 +151,23 @@ async def on_ready():
     logger.info(f"Bot conectado como {bot.user}")
 
 
+def configurar_logs() -> None:
+    """Console colorido (padrao do discord.py) + arquivo em logs/bot.log que
+    gira em 5 arquivos de 5 MB, para investigar erros depois."""
+    discord.utils.setup_logging(root=True)
+    pasta = os.path.join(BASE_DIR, "logs")
+    os.makedirs(pasta, exist_ok=True)
+    arquivo = RotatingFileHandler(
+        os.path.join(pasta, "bot.log"), maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    arquivo.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(arquivo)
+
+
 if __name__ == "__main__":
+    configurar_logs()
     try:
-        bot.run(TOKEN, root_logger=True)
+        bot.run(TOKEN, log_handler=None)
     except discord.PrivilegedIntentsRequired:
         logger.error(
             "O Discord recusou os intents do bot. Ligue 'Server Members Intent' e "

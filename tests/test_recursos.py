@@ -134,3 +134,98 @@ def test_fila_de_musica_salva(tmp_path, monkeypatch):
     monkeypatch.setattr(musica, "_canal_voz", {1: 500, 2: 600})
     musica._salvar_filas()
     assert musica._carregar_filas() == {1: (500, [musica.Faixa("A", "a", 60, "https://x/a", None)])}
+
+
+def test_anuncios_agendados():
+    from bot.cogs import anuncios
+
+    assert anuncios.interpretar_botao("Inscreva-se | https://site.com") == ("Inscreva-se", "https://site.com")
+    assert anuncios.interpretar_botao("sem link") is None
+    assert anuncios.interpretar_botao("Texto | ftp://x") is None
+
+    aid = anuncios.anuncio_agendar(1, 10, 9, {"titulo": "Oi", "texto": "..."}, 100.0)
+    assert anuncios.anuncios_vencidos(50.0) == []
+    assert [a[0] for a in anuncios.anuncios_vencidos(150.0)] == [aid]
+    assert anuncios.anuncio_apagar(aid, guild_id=2) is None  # outro servidor
+    assert anuncios.anuncio_apagar(aid, guild_id=1)["titulo"] == "Oi"
+    assert anuncios.anuncios_pendentes(1) == []
+
+
+def test_evento_avisado_uma_vez():
+    from bot.cogs import anuncios
+
+    assert not anuncios.evento_ja_avisado(5)
+    anuncios.evento_marcar_avisado(5)
+    anuncios.evento_marcar_avisado(5)
+    assert anuncios.evento_ja_avisado(5)
+
+
+def test_enquetes_registradas():
+    from bot.cogs import comunidade
+
+    comunidade.enquete_registrar(1, 10, 100.0)
+    assert comunidade.enquetes_vencidas(150.0) == [(1, 10, 0)]
+    comunidade.enquete_tentou_de_novo(1)
+    assert comunidade.enquetes_vencidas(150.0) == []  # empurrou 60s
+    assert comunidade.enquetes_vencidas(170.0) == [(1, 10, 1)]
+    comunidade.enquete_esquecer(1)
+    assert comunidade.enquetes_vencidas(1000.0) == []
+
+
+def test_raid_detectado():
+    import collections
+
+    from bot.cogs.moderacao import raid_detectado
+
+    entradas = collections.deque()
+    assert not raid_detectado(entradas, 0, limite=3, segundos=10)
+    assert not raid_detectado(entradas, 5, limite=3, segundos=10)
+    assert raid_detectado(entradas, 9, limite=3, segundos=10)
+    # Entradas antigas saem da janela.
+    assert not raid_detectado(entradas, 30, limite=3, segundos=10)
+
+
+def test_emojis_no_texto():
+    from bot.cogs.expressoes import emojis_no_texto, nome_valido
+
+    texto = "oi <:gato:123> e <a:danca:456> e de novo <:gato:123> e 😀"
+    achados = emojis_no_texto(texto)
+    assert [(e.name, e.id, e.animated) for e in achados] == [("gato", 123, False), ("danca", 456, True)]
+    assert nome_valido("meu emoji!") == "meu_emoji_"
+    assert nome_valido("a") is None
+
+
+def test_nome_da_thread():
+    from bot.cogs.servidor import nome_da_thread
+
+    assert nome_da_thread("Meu desenho\nfeito ontem", "Ana") == "Meu desenho"
+    assert nome_da_thread("", "Ana") == "Conversa de Ana"
+    assert len(nome_da_thread("x" * 200, "Ana")) == 90
+
+
+def test_backup(tmp_path):
+    import datetime
+    import sqlite3
+    import zipfile
+
+    from bot.cogs.manutencao import fazer_backup
+
+    dados = tmp_path / "data"
+    dados.mkdir()
+    with sqlite3.connect(dados / "xp.db") as conexao:
+        conexao.execute("CREATE TABLE t (x)")
+        conexao.execute("INSERT INTO t VALUES (42)")
+    (dados / "musica_fila.json").write_text("{}")
+    extra = tmp_path / "boas_vindas.json"
+    extra.write_text("{}")
+    destino = tmp_path / "backups"
+
+    for dia in range(1, 10):
+        caminho = fazer_backup(str(dados), str(destino), [str(extra)], 7, datetime.date(2026, 10, dia))
+    assert sorted(p.name for p in destino.iterdir())[0] == "backup-2026-10-03.zip"
+    assert len(list(destino.iterdir())) == 7
+    with zipfile.ZipFile(caminho) as arquivo_zip:
+        assert sorted(arquivo_zip.namelist()) == ["boas_vindas.json", "data/musica_fila.json", "data/xp.db"]
+        arquivo_zip.extract("data/xp.db", tmp_path / "restaurado")
+    with sqlite3.connect(tmp_path / "restaurado" / "data" / "xp.db") as conexao:
+        assert conexao.execute("SELECT x FROM t").fetchone() == (42,)

@@ -11,10 +11,10 @@ from bot.retry_ui import LayoutViewComRetry
 COMANDOS_CATEGORIAS = {
     "Geral": ["ping", "ajuda", "usuario", "avatar", "servidor"],
     "Moderacao": ["mod", "logs", "automod", "verificacao"],
-    "Comunidade": ["enquete", "sugerir", "sorteio", "cargos", "tickets", "candidaturas", "evento", "lembrete", "aniversario"],
-    "Voz e musica": ["musica", "som", "sala"],
+    "Comunidade": ["enquete", "sugerir", "sorteio", "anuncio", "cargos", "tickets", "candidaturas", "evento", "lembrete", "aniversario"],
+    "Voz e musica": ["musica", "som", "sala", "palco"],
     "Niveis e jogos": ["xp", "interagir", "gif"],
-    "Configuracao": ["configurar", "boasvindas"],
+    "Servidor": ["configurar", "boasvindas", "emoji", "cargo_visual"],
 }
 EMOJIS_CATEGORIAS = {
     "Geral": "📌",
@@ -22,7 +22,7 @@ EMOJIS_CATEGORIAS = {
     "Comunidade": "💬",
     "Voz e musica": "🎵",
     "Niveis e jogos": "🎮",
-    "Configuracao": "⚙️",
+    "Servidor": "⚙️",
     "Clique direito": "🖱️",
 }
 

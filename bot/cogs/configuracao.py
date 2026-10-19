@@ -5,7 +5,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import configstore, layout
-from bot.cogs import aniversarios, contagem, destaques, moderacao, sugestoes, voz, xp
+from bot.cogs import anuncios, aniversarios, contagem, destaques, moderacao, servidor, sugestoes, voz, xp
+from bot.cogs.servidor import EscolherCargosPergunta
 from bot.permissions import requer_manage_guild
 
 ACOES_ADVERTENCIA = [
@@ -146,6 +147,103 @@ class Configuracao(commands.Cog):
         texto = "XP em call ligado." if ativo else "XP em call desligado."
         await self._salvar(interaction, xp.CHAVE_XP_VOZ, ativo, texto)
 
+    @configurar.command(name="antiraid", description="Alerta (e pausa convites) quando muita gente entra de uma vez")
+    @app_commands.describe(
+        limite="Quantas entradas disparam o alerta (0 = desligar)",
+        segundos="Dentro de quantos segundos",
+        automatico="Pausar convites e DMs por 1h sozinho ao detectar?",
+    )
+    async def cfg_antiraid(
+        self,
+        interaction: discord.Interaction,
+        limite: app_commands.Range[int, 0, 100],
+        segundos: app_commands.Range[int, 5, 600] = 30,
+        automatico: bool = False,
+    ):
+        if not await requer_manage_guild(interaction, "esse comando"):
+            return
+        valor = {"limite": limite, "segundos": segundos, "automatico": automatico} if limite else None
+        texto = (
+            f"Alerta com {limite} entradas em {segundos}s"
+            + (", pausando convites e DMs por 1h." if automatico else " (so alerta, nos logs).")
+            if limite
+            else "Anti-raid desligado."
+        )
+        await self._salvar(interaction, moderacao.CHAVE_ANTIRAID, valor, texto)
+
+    @configurar.command(name="eventos", description="Aviso antes dos eventos e cargo para quem marcou interesse")
+    @app_commands.describe(
+        canal="Onde avisar que o evento vai comecar (vazio = desligar)",
+        minutos="Quantos minutos antes avisar",
+        cargo="Cargo dado a quem marca \"Tenho interesse\" (sai quando o evento acaba)",
+    )
+    async def cfg_eventos(
+        self,
+        interaction: discord.Interaction,
+        canal: discord.TextChannel | None = None,
+        minutos: app_commands.Range[int, 1, 1440] = 15,
+        cargo: discord.Role | None = None,
+    ):
+        if not await requer_manage_guild(interaction, "esse comando"):
+            return
+        valor = {"canal": canal.id, "minutos": minutos, "cargo": cargo.id if cargo else None} if canal else None
+        texto = (
+            f"Aviso {minutos} min antes em {canal.mention}" + (f", com o cargo {cargo.mention} para interessados." if cargo else ".")
+            if canal
+            else "Avisos de evento desligados."
+        )
+        await self._salvar(interaction, anuncios.CHAVE_EVENTOS, valor, texto)
+
+    @configurar.command(name="auto_thread", description="Liga ou desliga a thread automatica em cada mensagem de um canal")
+    @app_commands.describe(canal="Canal", ativo="Criar thread em cada mensagem nova?")
+    async def cfg_auto_thread(self, interaction: discord.Interaction, canal: discord.TextChannel, ativo: bool):
+        if not await requer_manage_guild(interaction, "esse comando"):
+            return
+        atuais = set(await asyncio.to_thread(configstore.obter, interaction.guild.id, servidor.CHAVE_AUTO_THREAD, []))
+        atuais = atuais | {canal.id} if ativo else atuais - {canal.id}
+        cog = self.bot.get_cog("Servidor")
+        if cog is not None:
+            cog.esquecer_auto_thread(interaction.guild.id)
+        texto = f"Cada mensagem em {canal.mention} vai ganhar uma thread." if ativo else f"Thread automatica desligada em {canal.mention}."
+        await self._salvar(interaction, servidor.CHAVE_AUTO_THREAD, sorted(atuais) or None, texto)
+
+    @configurar.command(name="tela_boas_vindas", description="Tela de boas-vindas do Discord (servidores da Comunidade)")
+    @app_commands.describe(
+        descricao="Texto do topo da tela",
+        canal1="Canal recomendado", texto1="Descricao do canal 1",
+        canal2="Canal recomendado (opcional)", texto2="Descricao do canal 2",
+        canal3="Canal recomendado (opcional)", texto3="Descricao do canal 3",
+    )
+    async def cfg_tela_boas_vindas(
+        self,
+        interaction: discord.Interaction,
+        descricao: app_commands.Range[str, 1, 140],
+        canal1: discord.TextChannel,
+        texto1: app_commands.Range[str, 1, 50],
+        canal2: discord.TextChannel | None = None,
+        texto2: app_commands.Range[str, 1, 50] | None = None,
+        canal3: discord.TextChannel | None = None,
+        texto3: app_commands.Range[str, 1, 50] | None = None,
+    ):
+        canais = [(canal1, texto1)]
+        for canal, texto in ((canal2, texto2), (canal3, texto3)):
+            if canal is not None:
+                canais.append((canal, texto or canal.name))
+        await self.bot.get_cog("Servidor").tela_boas_vindas(interaction, descricao, canais)
+
+    @configurar.command(name="integracao_pergunta", description="Adiciona uma pergunta de cargos na integracao inicial do Discord")
+    @app_commands.describe(titulo="A pergunta (ex: Quais jogos voce joga?)", varias="Pode escolher mais de uma opcao?")
+    async def cfg_integracao_pergunta(
+        self, interaction: discord.Interaction, titulo: app_commands.Range[str, 1, 100], varias: bool = True
+    ):
+        if not await requer_manage_guild(interaction, "esse comando"):
+            return
+        await interaction.response.send_message(
+            "Escolha de 2 a 25 cargos. Cada um vira uma opcao da pergunta, e quem escolher ganha o cargo.",
+            view=EscolherCargosPergunta(titulo, varias),
+            ephemeral=True,
+        )
+
     @configurar.command(name="ver", description="Mostra como o bot esta configurado neste servidor")
     async def ver(self, interaction: discord.Interaction):
         if not await requer_manage_guild(interaction, "esse comando"):
@@ -164,6 +262,9 @@ class Configuracao(commands.Cog):
                 "advertencias": obter(guild_id, moderacao.CHAVE_ADVERTENCIAS) or {},
                 "xp_voz": obter(guild_id, xp.CHAVE_XP_VOZ, True),
                 "xp": xp._xp_ativo(guild_id),
+                "antiraid": obter(guild_id, moderacao.CHAVE_ANTIRAID) or {},
+                "eventos": obter(guild_id, anuncios.CHAVE_EVENTOS) or {},
+                "auto_thread": obter(guild_id, servidor.CHAVE_AUTO_THREAD, []),
             }
 
         c = await asyncio.to_thread(ler)
@@ -181,6 +282,16 @@ class Configuracao(commands.Cog):
             "**Advertencias:** "
             + (f"punicao com {adv['limite']} ({adv['acao']})" if adv.get("limite") else "sem punicao automatica")
             + (f", expiram em {adv['validade_dias']} dia(s)" if adv.get("validade_dias") else ""),
+            "**Anti-raid:** "
+            + (
+                f"{c['antiraid']['limite']} entradas em {c['antiraid']['segundos']}s"
+                + (" (pausa sozinho)" if c["antiraid"].get("automatico") else " (so alerta)")
+                if c["antiraid"]
+                else "desligado"
+            ),
+            f"**Avisos de evento:** {_canal(c['eventos'].get('canal'))}"
+            + (f" ({c['eventos'].get('minutos')} min antes)" if c["eventos"] else ""),
+            "**Thread automatica:** " + (", ".join(f"<#{cid}>" for cid in c["auto_thread"]) or "desligada"),
         ]
         view = layout.view_estatica(
             layout.texto("## Configuracao do servidor\n" + "\n".join(linhas)),

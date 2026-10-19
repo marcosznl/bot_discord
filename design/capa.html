@@ -1,0 +1,128 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Capa do projeto (1280x640) -> docs/previa-social.png. Mesmo estilo das
+     capas do Fluxo e do Tocando: degrade escuro, icone, titulo e uma previa
+     do app a direita (aqui, mensagens do bot como aparecem no Discord). -->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: linear-gradient(120deg, #1a1240 0%, #2d2a7a 45%, #4b4fd6 100%);
+    color: #fff;
+    position: relative;
+  }
+  .esquerda { position: absolute; left: 80px; top: 126px; width: 560px; }
+  .icone { width: 120px; height: 120px; display: block; margin-left: -6px; filter: drop-shadow(0 12px 24px rgba(10, 6, 40, .45)); }
+  h1 { font-size: 96px; font-weight: 800; letter-spacing: -2px; margin: 34px 0 12px; line-height: 1; }
+  .subtitulo { font-size: 31px; line-height: 1.3; margin: 0; color: #eef; font-weight: 500; }
+  .rodape { font-size: 21px; color: #c8c9f5; margin-top: 30px; }
+
+  /* janela do Discord */
+  .janela {
+    position: absolute; left: 676px; top: 70px; width: 560px; height: 520px;
+    background: #313338; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 30px 60px rgba(8, 5, 35, .55), 0 0 0 1px rgba(255, 255, 255, .06);
+    font-size: 14px; color: #dbdee1;
+  }
+  .barra-canal {
+    height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 18px;
+    border-bottom: 1px solid #1f2023; color: #f2f3f5; font-weight: 600; font-size: 15px;
+  }
+  .barra-canal .cerquilha { color: #80848e; font-size: 22px; font-weight: 400; }
+  .mensagens { padding: 14px 18px 0; display: flex; flex-direction: column; gap: 16px; }
+  .mensagem { display: flex; gap: 14px; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; flex: none; }
+  .corpo { flex: 1; min-width: 0; }
+  .cabecalho { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .nome { color: #a5a0ff; font-weight: 600; font-size: 15px; }
+  .tag { background: #5865f2; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
+  .hora { color: #949ba4; font-size: 12px; }
+  .comando { color: #949ba4; font-size: 13px; margin-bottom: 6px; }
+  .comando b { color: #c9cdfb; font-weight: 500; }
+
+  .container {
+    background: #2b2d31; border: 1px solid #3a3c42; border-left: 4px solid #5865f2;
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .secao { display: flex; gap: 14px; justify-content: space-between; }
+  .titulo-card { color: #f2f3f5; font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+  .link { color: #00a8fc; font-weight: 500; }
+  .sub { color: #949ba4; font-size: 12px; margin-top: 4px; }
+  .capa-musica {
+    width: 76px; height: 76px; border-radius: 8px; flex: none;
+    background: linear-gradient(135deg, #ff7eb3, #ff758c 40%, #7a5cff);
+    display: grid; place-items: center; font-size: 34px;
+  }
+  .progresso { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: #b5bac1; }
+  .trilho { flex: 1; height: 5px; background: #4e5058; border-radius: 3px; overflow: hidden; }
+  .trilho i { display: block; width: 42%; height: 100%; background: #5865f2; }
+  .separador { height: 1px; background: #3f4147; margin: 12px 0; }
+  .fila { color: #dbdee1; font-size: 13px; line-height: 1.6; }
+  .fila span { color: #949ba4; }
+  .botoes { display: flex; gap: 8px; margin-top: 12px; }
+  .botao {
+    display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px;
+    background: #4e5058; color: #fff; font-weight: 500; font-size: 13px;
+  }
+  .botao img { width: 18px; height: 18px; }
+  .botao.verde { background: #248046; }
+  .botao.vermelho { background: #da373c; }
+  .sorteio { border-left-color: #f0b232; }
+  .sorteio .linha { display: flex; align-items: center; justify-content: space-between; }
+</style>
+<body>
+  <div class="esquerda">
+    <img class="icone" src="../docs/icone.png" alt="">
+    <h1>Arco</h1>
+    <p class="subtitulo">Moderação, comunidade, música<br>e níveis em um só bot de Discord.</p>
+    <div class="rodape">Python · discord.py 2.7 · em português e inglês</div>
+  </div>
+
+  <div class="janela">
+    <div class="barra-canal"><span class="cerquilha">#</span> geral</div>
+    <div class="mensagens">
+      <div class="mensagem">
+        <img class="avatar" src="../docs/icone.png" alt="">
+        <div class="corpo">
+          <div class="comando">↳ Ana usou <b>/musica painel</b></div>
+          <div class="cabecalho"><span class="nome">Arco</span><span class="tag">APP</span><span class="hora">hoje às 21:14</span></div>
+          <div class="container">
+            <div class="secao">
+              <div>
+                <div class="titulo-card">Tocando agora</div>
+                <div class="link">Noite de Verão (ao vivo)</div>
+                <div class="progresso"><span>1:38</span><div class="trilho"><i></i></div><span>3:52</span></div>
+                <div class="sub">Canal: 🔊 Sala de Ana</div>
+              </div>
+              <div class="capa-musica">🎶</div>
+            </div>
+            <div class="separador"></div>
+            <div class="fila"><b>A seguir</b><br>1. Céu Aberto <span>(4:05)</span><br>2. Madrugada <span>(3:21)</span></div>
+            <div class="botoes">
+              <div class="botao verde"><img src="../assets/emojis/tocar.png" alt="">Tocar</div>
+              <div class="botao"><img src="../assets/emojis/anterior.png" alt="">Anterior</div>
+              <div class="botao"><img src="../assets/emojis/pular.png" alt="">Pular</div>
+              <div class="botao vermelho"><img src="../assets/emojis/parar.png" alt="">Parar</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mensagem">
+        <img class="avatar" src="../docs/icone.png" alt="">
+        <div class="corpo">
+          <div class="cabecalho"><span class="nome">Arco</span><span class="tag">APP</span><span class="hora">hoje às 21:20</span></div>
+          <div class="container sorteio">
+            <div class="titulo-card">🎉 Nitro de 1 mês</div>
+            <div class="sub" style="font-size:13px;color:#b5bac1">Termina em 2 horas · 2 vencedores</div>
+            <div class="sorteio linha" style="margin-top:10px">
+              <div class="botao verde"><img src="../assets/emojis/sorteio.png" alt="">Participar</div>
+              <span class="sub">48 participantes</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>

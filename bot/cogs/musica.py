@@ -4,12 +4,14 @@ import os
 import time
 from dataclasses import asdict, dataclass
 
+import aiohttp
 import discord
 import yt_dlp
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot import layout
+from bot.emojis import emoji
 from bot.config import DATA_DIR
 from bot.jsonstore import escrever_json, ler_json
 from bot.retry_ui import LayoutViewComRetry, ModalComRetry
@@ -335,17 +337,17 @@ class PainelMusica(LayoutViewComRetry):
 
         container.add_item(
             layout.linha(
-                layout.botao("Tocar", _abrir_modal_tocar, discord.ButtonStyle.success),
-                layout.botao("Anterior", _musica_acao_anterior),
-                layout.botao("Pular", _musica_acao_pular),
-                layout.botao("Parar", _musica_acao_parar, discord.ButtonStyle.danger),
+                layout.botao("Tocar", _abrir_modal_tocar, discord.ButtonStyle.success, emoji=emoji("tocar")),
+                layout.botao("Anterior", _musica_acao_anterior, emoji=emoji("anterior")),
+                layout.botao("Pular", _musica_acao_pular, emoji=emoji("pular")),
+                layout.botao("Parar", _musica_acao_parar, discord.ButtonStyle.danger, emoji=emoji("parar")),
             )
         )
         container.add_item(
             layout.linha(
-                layout.botao("Fila", _musica_acao_fila),
+                layout.botao("Fila", _musica_acao_fila, emoji=emoji("fila")),
                 layout.botao("Limpar fila", _musica_acao_limpar_fila, discord.ButtonStyle.danger),
-                layout.botao("Atualizar", self._atualizar, discord.ButtonStyle.primary),
+                layout.botao("Atualizar", self._atualizar, discord.ButtonStyle.primary, emoji=emoji("atualizar")),
             )
         )
         self.add_item(container)
@@ -361,12 +363,15 @@ class Musica(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._fila_restaurada = False
+        self._http: aiohttp.ClientSession | None = None
 
     async def cog_load(self) -> None:
         self.verificar_ocioso_voz.start()
 
     async def cog_unload(self) -> None:
         self.verificar_ocioso_voz.cancel()
+        if self._http is not None:
+            await self._http.close()
 
     @tasks.loop(seconds=30)
     async def verificar_ocioso_voz(self):
@@ -419,6 +424,26 @@ class Musica(commands.Cog):
     @app_commands.describe(busca="Link do YouTube ou o nome da musica")
     async def tocar(self, interaction: discord.Interaction, busca: app_commands.Range[str, 1, 200]):
         await _musica_acao_tocar(interaction, busca)
+
+    @tocar.autocomplete("busca")
+    async def _sugestoes_youtube(self, interaction: discord.Interaction, atual: str) -> list[app_commands.Choice[str]]:
+        # Sugestoes de busca do proprio YouTube enquanto a pessoa digita. O
+        # Discord so espera 3s pelo autocomplete, entao desiste rapido.
+        atual = atual.strip()
+        if len(atual) < 2 or atual.startswith(("http://", "https://")):
+            return []
+        if self._http is None or self._http.closed:
+            self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1.5))
+        try:
+            async with self._http.get(
+                "https://suggestqueries.google.com/complete/search",
+                params={"client": "firefox", "ds": "yt", "q": atual},
+            ) as resposta:
+                dados = await resposta.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return []
+        sugestoes = [atual, *(s for s in dados[1] if s.lower() != atual.lower())] if len(dados) > 1 else [atual]
+        return [app_commands.Choice(name=s[:100], value=s[:100]) for s in sugestoes[:25]]
 
     @musica.command(name="pular", description="Pula para a proxima musica da fila")
     async def pular(self, interaction: discord.Interaction):

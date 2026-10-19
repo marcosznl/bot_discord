@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot import layout, sqlitestore
+from bot import banco, layout, sqlitestore
 from bot.cogs.moderacao import enviar_log
 from bot.config import DATA_DIR, FUSO
 from bot.permissions import cargo_perigoso, motivo_cargo_invalido, requer_permissao
@@ -105,6 +105,56 @@ def interpretar_quando(texto: str, agora: datetime.datetime | None = None) -> da
 
 def opcoes_enquete(texto: str) -> list[str]:
     return [opcao.strip()[:55] for opcao in texto.split(";") if opcao.strip()]
+
+
+# ---------------------------------------------------------------- resultado de enquete
+
+banco.registrar_schema(
+    "CREATE TABLE IF NOT EXISTS enquetes ("
+    "mensagem_id INTEGER PRIMARY KEY, canal_id INTEGER NOT NULL, termina_em REAL NOT NULL, tentativas INTEGER NOT NULL DEFAULT 0)"
+)
+
+
+def enquete_registrar(mensagem_id: int, canal_id: int, termina_em: float) -> None:
+    banco.executar(
+        "INSERT OR REPLACE INTO enquetes (mensagem_id, canal_id, termina_em) VALUES (?, ?, ?)",
+        (mensagem_id, canal_id, termina_em),
+    )
+
+
+def enquetes_vencidas(agora: float) -> list[tuple[int, int, int]]:
+    return banco.todos("SELECT mensagem_id, canal_id, tentativas FROM enquetes WHERE termina_em <= ?", (agora,))
+
+
+def enquete_tentou_de_novo(mensagem_id: int) -> None:
+    # O Discord leva alguns segundos para fechar a contagem - tenta de novo
+    # no proximo minuto.
+    banco.executar("UPDATE enquetes SET tentativas = tentativas + 1, termina_em = termina_em + 60 WHERE mensagem_id = ?", (mensagem_id,))
+
+
+def enquete_esquecer(mensagem_id: int) -> None:
+    banco.executar("DELETE FROM enquetes WHERE mensagem_id = ?", (mensagem_id,))
+
+
+def cartao_resultado(enquete: discord.Poll) -> discord.ui.LayoutView:
+    total = enquete.total_votes
+    respostas = sorted(enquete.answers, key=lambda r: r.vote_count, reverse=True)
+    maximo = respostas[0].vote_count if respostas else 0
+    linhas = []
+    for resposta in respostas:
+        porcentagem = round(100 * resposta.vote_count / total) if total else 0
+        coroa = " 🏆" if total and resposta.vote_count == maximo else ""
+        linhas.append(
+            f"**{resposta.text}**{coroa}\n`{layout.barra_progresso(resposta.vote_count, total or 1, 16)}` "
+            f"{porcentagem}% ({resposta.vote_count})"
+        )
+    return layout.view_estatica(
+        layout.texto(f"## 📊 Resultado: {enquete.question}"),
+        layout.separador(),
+        layout.texto("\n".join(linhas)),
+        layout.texto(f"-# {total} voto(s)"),
+        cor=discord.Color.blurple(),
+    )
 
 
 # ---------------------------------------------------------------- lembretes (sqlite)
@@ -416,9 +466,36 @@ class Comunidade(commands.Cog):
 
     async def cog_load(self) -> None:
         self.entregar_lembretes.start()
+        self.resultados_enquetes.start()
 
     async def cog_unload(self) -> None:
         self.entregar_lembretes.cancel()
+        self.resultados_enquetes.cancel()
+
+    @tasks.loop(minutes=1)
+    async def resultados_enquetes(self):
+        for mensagem_id, canal_id, tentativas in await asyncio.to_thread(enquetes_vencidas, time.time()):
+            canal = self.bot.get_channel(canal_id)
+            if canal is None or tentativas >= 5:
+                await asyncio.to_thread(enquete_esquecer, mensagem_id)
+                continue
+            try:
+                mensagem = await canal.fetch_message(mensagem_id)
+            except discord.HTTPException:
+                await asyncio.to_thread(enquete_esquecer, mensagem_id)
+                continue
+            if mensagem.poll is None or not mensagem.poll.is_finalised():
+                await asyncio.to_thread(enquete_tentou_de_novo, mensagem_id)
+                continue
+            await asyncio.to_thread(enquete_esquecer, mensagem_id)
+            try:
+                await mensagem.reply(view=cartao_resultado(mensagem.poll), allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException as erro:
+                logger.warning(f"Nao consegui publicar o resultado da enquete {mensagem_id}: {erro}")
+
+    @resultados_enquetes.before_loop
+    async def _antes_enquetes(self):
+        await self.bot.wait_until_ready()
 
     # ---- /enquete
 
@@ -431,6 +508,7 @@ class Comunidade(commands.Cog):
         duracao="Quanto tempo a enquete fica aberta",
         multipla="Pode votar em mais de uma opcao?",
     )
+    @app_commands.checks.cooldown(1, 30, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.choices(duracao=DURACOES_ENQUETE)
     async def enquete(
         self,
@@ -452,6 +530,12 @@ class Comunidade(commands.Cog):
         for opcao in lista:
             enquete.add_answer(text=opcao)
         await interaction.response.send_message(poll=enquete)
+        # Guarda para publicar o resultado completo quando acabar (so da se
+        # o bot estiver no servidor/canal - nao em instalacao de usuario).
+        if interaction.guild is not None and interaction.is_guild_integration():
+            mensagem = await interaction.original_response()
+            termina = time.time() + enquete.duration.total_seconds()
+            await asyncio.to_thread(enquete_registrar, mensagem.id, interaction.channel_id, termina)
 
     # ---- /cargos e /tickets
 
@@ -563,6 +647,7 @@ class Comunidade(commands.Cog):
     # ---- /lembrete
 
     @lembrete.command(name="criar", description="Cria um lembrete")
+    @app_commands.checks.cooldown(5, 60, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(
         quando="Daqui quanto tempo (10m, 2h, 1d) ou quando (25/12 20:00, amanha 9h)",
         texto="Do que lembrar",

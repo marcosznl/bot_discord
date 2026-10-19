@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import datetime
 import logging
 import os
@@ -47,6 +48,31 @@ MODO_LENTO = [
 # {"limite": int, "acao": "silenciar"|"expulsar"|"banir", "duracao_min": int, "validade_dias": int}
 CHAVE_ADVERTENCIAS = "advertencias"
 ACOES_ADVERTENCIA = {"silenciar": "silenciado(a)", "expulsar": "expulso(a)", "banir": "banido(a)"}
+
+# {"limite": int, "segundos": int, "automatico": bool}
+CHAVE_ANTIRAID = "antiraid"
+ANTIRAID_PAUSA_AUTOMATICA = datetime.timedelta(hours=1)
+ACOES_RAID = [
+    app_commands.Choice(name="Pausar convites e DMs", value="pausar"),
+    app_commands.Choice(name="Liberar convites e DMs", value="liberar"),
+]
+
+
+def raid_detectado(entradas: collections.deque, agora: float, limite: int, segundos: int) -> bool:
+    """Registra a entrada de agora e diz se ja sao `limite` entradas dentro
+    da janela de `segundos`."""
+    entradas.append(agora)
+    while entradas and agora - entradas[0] > segundos:
+        entradas.popleft()
+    return len(entradas) >= limite
+
+
+async def pausar_servidor(guild: discord.Guild, duracao: datetime.timedelta | None, motivo: str) -> None:
+    """Pausa (ou libera, com duracao None) convites e DMs entre membros -
+    o modo de seguranca nativo do Discord. Dura no maximo 24h."""
+    ate = discord.utils.utcnow() + duracao if duracao else None
+    await guild.edit(invites_disabled_until=ate, dms_disabled_until=ate, reason=motivo)
+
 
 _mod_schemas_prontos: set[str] = set()
 
@@ -415,6 +441,8 @@ class Moderacao(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._entradas: dict[int, collections.deque] = {}
+        self._ultimo_alerta_raid: dict[int, float] = {}
         self.menu_denunciar = app_commands.ContextMenu(name="Denunciar mensagem", callback=self.denunciar)
         self.menu_fixar = app_commands.ContextMenu(name="Fixar ou desafixar", callback=self.fixar)
         self.bot.tree.add_command(self.menu_denunciar)
@@ -711,6 +739,30 @@ class Moderacao(commands.Cog):
         else:
             await interaction.response.send_message("🔓 Canal destrancado.")
 
+    @mod.command(name="raid", description="Pausa ou libera convites e DMs entre membros (modo de seguranca do Discord)")
+    @app_commands.describe(acao="Pausar ou liberar", horas="Por quantas horas pausar (maximo 24)")
+    @app_commands.choices(acao=ACOES_RAID)
+    async def raid(
+        self,
+        interaction: discord.Interaction,
+        acao: app_commands.Choice[str],
+        horas: app_commands.Range[int, 1, 24] = 6,
+    ):
+        if not await requer_permissao(interaction, "manage_guild", "esse comando"):
+            return
+        if not interaction.app_permissions.manage_guild:
+            await interaction.response.send_message("Eu preciso da permissao Gerenciar Servidor para isso.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        if acao.value == "pausar":
+            await pausar_servidor(interaction.guild, datetime.timedelta(hours=horas), _motivo_auditoria(interaction, "Modo raid"))
+            texto = f"🛡️ Convites e DMs entre membros pausados por {horas}h."
+        else:
+            await pausar_servidor(interaction.guild, None, _motivo_auditoria(interaction, "Fim do modo raid"))
+            texto = "Convites e DMs liberados de novo."
+        await enviar_log(interaction.guild, "Modo raid", f"{texto}\n**Por:** {interaction.user.mention}", discord.Color.red())
+        await interaction.followup.send(texto)
+
     # ---- /logs e /automod
 
     @app_commands.command(name="logs", description="Configura o canal de logs da moderacao")
@@ -788,6 +840,31 @@ class Moderacao(commands.Cog):
         await enviar_log(
             membro.guild, "Entrou", f"{membro.mention} ({membro})\nConta criada {criada}", discord.Color.green()
         )
+        await self._vigiar_raid(membro.guild)
+
+    async def _vigiar_raid(self, guild: discord.Guild) -> None:
+        config = await asyncio.to_thread(configstore.obter, guild.id, CHAVE_ANTIRAID)
+        if not config:
+            return
+        agora = time.time()
+        entradas = self._entradas.setdefault(guild.id, collections.deque())
+        if not raid_detectado(entradas, agora, config["limite"], config["segundos"]):
+            return
+        # Um alerta a cada 5 min no maximo, senao o proprio log vira spam.
+        if agora - self._ultimo_alerta_raid.get(guild.id, 0) < 300:
+            return
+        self._ultimo_alerta_raid[guild.id] = agora
+
+        texto = f"**{len(entradas)} entradas em {config['segundos']}s.**"
+        if config.get("automatico") and not guild.invites_paused():
+            try:
+                await pausar_servidor(guild, ANTIRAID_PAUSA_AUTOMATICA, "Possivel raid detectado pelo bot")
+                texto += "\nConvites e DMs pausados por 1h automaticamente. Libere antes com `/mod raid`."
+            except discord.HTTPException as erro:
+                texto += f"\nNao consegui pausar os convites: {erro}"
+        else:
+            texto += "\nUse `/mod raid` para pausar convites e DMs."
+        await enviar_log(guild, "⚠️ Possivel raid", texto, discord.Color.red())
 
     @commands.Cog.listener()
     async def on_member_remove(self, membro: discord.Member):

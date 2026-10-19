@@ -11,6 +11,7 @@ NOMES_PERMISSOES = {
     "moderate_members": "Moderar Membros",
     "kick_members": "Expulsar Membros",
     "ban_members": "Banir Membros",
+    "create_expressions": "Criar Expressoes",
 }
 
 

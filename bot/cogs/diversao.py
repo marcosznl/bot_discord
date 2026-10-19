@@ -61,6 +61,7 @@ class Diversao(commands.Cog):
     @app_commands.command(name="gif", description="Busca um gif pela palavra-chave")
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.checks.cooldown(3, 30, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(busca="Palavra-chave para buscar o gif")
     async def gif(self, interaction: discord.Interaction, busca: str):
         await interaction.response.defer()
@@ -74,6 +75,7 @@ class Diversao(commands.Cog):
 
     @app_commands.command(name="interagir", description="Interage com alguem usando um gif de anime")
     @app_commands.guild_only()
+    @app_commands.checks.cooldown(3, 30, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(acao="O que fazer", pessoa="Com quem")
     @app_commands.choices(
         acao=[app_commands.Choice(name=nome, value=chave) for chave, (nome, _, _) in INTERACOES.items()]

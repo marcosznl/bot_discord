@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import banco, configstore
+from bot.permissions import requer_permissao
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,13 @@ def salas_todas() -> list[tuple[int, int]]:
 
 class Voz(commands.Cog):
     sala = app_commands.Group(name="sala", description="Controla a sua sala de voz temporaria", guild_only=True)
+    som = app_commands.Group(name="som", description="Soundboard do servidor", guild_only=True)
+    palco = app_commands.Group(
+        name="palco",
+        description="Abre e organiza palcos (canais de palco)",
+        guild_only=True,
+        default_permissions=discord.Permissions(manage_channels=True),
+    )
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -203,10 +211,9 @@ class Voz(commands.Cog):
             self._sons_padrao = await self.bot.fetch_soundboard_default_sounds()
         return self._sons_padrao
 
-    @app_commands.command(name="som", description="Toca um som do soundboard no seu canal de voz")
-    @app_commands.guild_only()
+    @som.command(name="tocar", description="Toca um som do soundboard no seu canal de voz")
     @app_commands.describe(som="Comece a digitar o nome do som")
-    async def som(self, interaction: discord.Interaction, som: str):
+    async def som_tocar(self, interaction: discord.Interaction, som: str):
         voz = interaction.user.voice
         if voz is None or voz.channel is None:
             await interaction.response.send_message("Voce precisa estar em um canal de voz.", ephemeral=True)
@@ -239,7 +246,7 @@ class Voz(commands.Cog):
         await voz.channel.send_sound(escolhido)
         await interaction.followup.send(f"🔊 {escolhido.name}", ephemeral=True)
 
-    @som.autocomplete("som")
+    @som_tocar.autocomplete("som")
     async def _som_autocomplete(self, interaction: discord.Interaction, atual: str) -> list[app_commands.Choice[str]]:
         atual = atual.lower()
         opcoes = [
@@ -257,6 +264,91 @@ class Voz(commands.Cog):
             if atual in s.name.lower()
         ]
         return opcoes[:25]
+
+
+    @som.command(name="adicionar", description="Adiciona um som ao soundboard do servidor")
+    @app_commands.describe(
+        nome="Nome do som",
+        audio="MP3 ou OGG de ate 512 KB e 5,2 segundos",
+        emoji="Emoji do som (opcional)",
+        volume="Volume de 1 a 100 (padrao 100)",
+    )
+    async def som_adicionar(
+        self,
+        interaction: discord.Interaction,
+        nome: app_commands.Range[str, 2, 32],
+        audio: discord.Attachment,
+        emoji: str | None = None,
+        volume: app_commands.Range[int, 1, 100] = 100,
+    ):
+        if not await requer_permissao(interaction, "create_expressions", "esse comando"):
+            return
+        if audio.content_type not in ("audio/mpeg", "audio/ogg") or audio.size > 512 * 1024:
+            await interaction.response.send_message("Envie um MP3 ou OGG de ate 512 KB.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        criado = await interaction.guild.create_soundboard_sound(
+            name=nome,
+            sound=await audio.read(),
+            volume=volume / 100,
+            emoji=emoji.strip() if emoji else None,
+            reason=f"Adicionado por {interaction.user}",
+        )
+        await interaction.followup.send(f"🔊 Som **{criado.name}** adicionado. Toque com `/som tocar`.")
+
+    # ---- palcos
+
+    @palco.command(name="abrir", description="Abre um palco com um tema")
+    @app_commands.describe(canal="Canal de palco", tema="Sobre o que e o palco", notificar="Avisar todo mundo que o palco comecou?")
+    async def palco_abrir(
+        self,
+        interaction: discord.Interaction,
+        canal: discord.StageChannel,
+        tema: app_commands.Range[str, 1, 120],
+        notificar: bool = False,
+    ):
+        if not await requer_permissao(interaction, "manage_channels", "esse comando"):
+            return
+        if canal.instance is not None:
+            await canal.instance.edit(topic=tema)
+            await interaction.response.send_message(f"Tema do palco {canal.mention} trocado para **{tema}**.")
+            return
+        await interaction.response.defer()
+        await canal.create_instance(
+            topic=tema, send_start_notification=notificar, reason=f"Aberto por {interaction.user}"
+        )
+        await interaction.followup.send(f"🎙️ Palco aberto em {canal.mention}: **{tema}**")
+
+    @palco.command(name="fechar", description="Encerra o palco")
+    @app_commands.describe(canal="Canal de palco")
+    async def palco_fechar(self, interaction: discord.Interaction, canal: discord.StageChannel):
+        if not await requer_permissao(interaction, "manage_channels", "esse comando"):
+            return
+        if canal.instance is None:
+            await interaction.response.send_message("Esse palco nao esta aberto.", ephemeral=True)
+            return
+        await canal.instance.delete(reason=f"Fechado por {interaction.user}")
+        await interaction.response.send_message(f"Palco {canal.mention} encerrado.")
+
+    @palco.command(name="palestrante", description="Sobe alguem da plateia para falar no palco")
+    @app_commands.describe(membro="Quem vai falar (precisa estar no palco)")
+    async def palco_palestrante(self, interaction: discord.Interaction, membro: discord.Member):
+        await self._mover_no_palco(interaction, membro, falar=True)
+
+    @palco.command(name="plateia", description="Desce alguem para a plateia")
+    @app_commands.describe(membro="Quem vai para a plateia")
+    async def palco_plateia(self, interaction: discord.Interaction, membro: discord.Member):
+        await self._mover_no_palco(interaction, membro, falar=False)
+
+    async def _mover_no_palco(self, interaction: discord.Interaction, membro: discord.Member, falar: bool) -> None:
+        if not await requer_permissao(interaction, "manage_channels", "esse comando"):
+            return
+        if membro.voice is None or not isinstance(membro.voice.channel, discord.StageChannel):
+            await interaction.response.send_message(f"{membro.mention} nao esta em um palco.", ephemeral=True)
+            return
+        await membro.edit(suppress=not falar)
+        texto = f"{membro.mention} agora pode falar." if falar else f"{membro.mention} voltou para a plateia."
+        await interaction.response.send_message(texto)
 
 
 async def setup(bot: commands.Bot):

@@ -227,6 +227,7 @@ class Sugestoes(commands.Cog):
 
     @app_commands.command(name="sugerir", description="Manda uma sugestao para o servidor votar")
     @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 120, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(texto="Sua sugestao")
     async def sugerir(self, interaction: discord.Interaction, texto: app_commands.Range[str, 10, 1500]):
         canal_id = await asyncio.to_thread(configstore.obter, interaction.guild.id, CHAVE_CANAL)

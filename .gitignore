@@ -8,3 +8,5 @@ data/
 boas_vindas.json
 .DS_Store
 .vscode/
+logs/
+backups/

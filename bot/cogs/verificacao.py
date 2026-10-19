@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.cogs.moderacao import enviar_log
+from bot.emojis import emoji
 from bot.permissions import cargo_perigoso, motivo_cargo_invalido, requer_permissao
 
 
@@ -14,7 +15,7 @@ class BotaoVerificar(discord.ui.DynamicItem[discord.ui.Button], template=r"verif
         super().__init__(
             discord.ui.Button(
                 label="Verificar",
-                emoji="✅",
+                emoji=emoji("verificado"),
                 style=discord.ButtonStyle.success,
                 custom_id=f"verificar:{cargo_id}:{idade_minima_dias}",
             )

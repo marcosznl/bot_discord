@@ -9,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot import banco, layout
+from bot.emojis import emoji
 from bot.cogs.comunidade import interpretar_quando
 from bot.config import FUSO
 from bot.permissions import requer_permissao
@@ -127,7 +128,7 @@ class BotaoParticipar(discord.ui.DynamicItem[discord.ui.Button], template=r"sort
         super().__init__(
             discord.ui.Button(
                 label="Participar",
-                emoji="🎉",
+                emoji=emoji("sorteio"),
                 style=discord.ButtonStyle.success,
                 custom_id=f"sorteio:{sorteio_id}",
                 disabled=desativado,
@@ -237,6 +238,7 @@ class Sorteios(commands.Cog):
         return novos
 
     @sorteio.command(name="criar", description="Cria um sorteio neste canal")
+    @app_commands.checks.cooldown(1, 30, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(
         premio="O que vai ser sorteado",
         duracao="Quanto tempo fica aberto (ex: 30m, 2h, 3d) ou ate quando (25/12 20:00)",
